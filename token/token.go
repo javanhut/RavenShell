@@ -31,6 +31,7 @@ const (
 	LESS       TokenType = "LESS"
 	OUT        TokenType = "OUT"
 	FULLSTOP   TokenType = "FULLSTOP"
+	FSLASH		 TokenType = "FSLASH"
 )
 
 var TokenMap = map[string]TokenType{
@@ -42,6 +43,6 @@ var TokenMap = map[string]TokenType{
 	"cwd":    CURRENTDIR,
 	"whoami": WHOAMI,
 	"mkfile": MAKEFILE,
-	"output": OUTPUT,
+	"out": OUTPUT,
 	"print":  PRINT,
 }

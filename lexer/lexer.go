@@ -27,6 +27,13 @@ func (l *Lexer) advance() byte {
 	return ch
 }
 
+func (l *Lexer) peekNext() byte {
+	if l.pos+1 >= len(l.input) {
+		return 0
+	}
+	return l.input[l.pos+1]
+}
+
 func (l *Lexer) NextToken() token.Token {
 	ch := l.peek()
 	if unicode.IsSpace(rune(ch)) {
@@ -41,14 +48,25 @@ func (l *Lexer) NextToken() token.Token {
 		return token.Token{Type: token.FULLSTOP, Literal: string(l.advance())}
 	case '$':
 		return token.Token{Type: token.DOLLAR, Literal: string(l.advance())}
+	case '/':
+		return token.Token{Type: token.FSLASH, Literal: string(l.advance())}
 	case '>':
-		if l.peek() == '>' {
+		if l.peekNext() == '>' {
 			start := l.pos
 			l.advance()
 			l.advance()
 			return token.Token{Type: token.INTO, Literal: l.input[start:l.pos]}
 		} else {
 			return token.Token{Type: token.GREATER, Literal: string(l.advance())}
+		}
+	case '<':
+		if l.peekNext() == '<' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.OUT, Literal: l.input[start:l.pos]}
+		} else {
+			return token.Token{Type: token.LESS, Literal: string(l.advance())}
 		}
 	case '"':
 		// 1. Skip the opening quote
@@ -105,10 +123,14 @@ func (l *Lexer) NextToken() token.Token {
 		return token.Token{Type: token.INTEGER, Literal: l.input[start:l.pos]}
 	} else if unicode.IsLetter(rune(ch)) {
 		start := l.pos
-		for unicode.IsLetter(rune(l.peek())) {
+		for isAlphanumeric(l.peek()) {
 			l.advance()
 		}
 		return token.Token{Type: token.IDENT, Literal: l.input[start:l.pos]}
 	}
 	return token.Token{Type: token.ILLEGAL, Literal: string(l.advance())}
+}
+
+func isAlphanumeric(ch byte) bool {
+	return unicode.IsLetter(rune(ch)) || unicode.IsDigit(rune(ch)) || ch == '_'
 }

@@ -37,8 +37,19 @@ func (l *Lexer) NextToken() token.Token {
 	switch ch {
 	case '|':
 		return token.Token{Type: token.PIPE, Literal: string(l.advance())}
+	case '.':
+		return token.Token{Type: token.FULLSTOP, Literal: string(l.advance())}
 	case '$':
 		return token.Token{Type: token.DOLLAR, Literal: string(l.advance())}
+	case '>':
+		if l.peek() == '>' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.INTO, Literal: l.input[start:l.pos]}
+		} else {
+			return token.Token{Type: token.GREATER, Literal: string(l.advance())}
+		}
 	case '"':
 		// 1. Skip the opening quote
 		l.advance()
@@ -61,7 +72,7 @@ func (l *Lexer) NextToken() token.Token {
 		}
 		return token.Token{Type: token.STRING, Literal: literal}
 	case '\'':
-		
+
 		// 1. Skip the opening quote
 		l.advance()
 		start := l.pos

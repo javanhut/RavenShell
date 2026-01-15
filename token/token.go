@@ -24,8 +24,13 @@ const (
 	INTEGER    TokenType = "INTEGER"
 	STRING     TokenType = "STRING"
 	PIPE       TokenType = "PIPE"
-	DOLLAR		 TokenType = "DOLLAR"
-	PRINT			 TokenType = "PRINT"
+	DOLLAR     TokenType = "DOLLAR"
+	PRINT      TokenType = "PRINT"
+	GREATER    TokenType = "GREATER"
+	INTO       TokenType = "INTO"
+	LESS       TokenType = "LESS"
+	OUT        TokenType = "OUT"
+	FULLSTOP   TokenType = "FULLSTOP"
 )
 
 var TokenMap = map[string]TokenType{

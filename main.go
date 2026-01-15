@@ -33,15 +33,15 @@ func ravenInterpreter() {
 			ttype := tok.Type
 			literal := tok.Literal
 			if ttype == token.IDENT {
-				kwToken, ok := tokenMap[literal]
+				kwType, ok := tokenMap[literal]
 				if ok {
-					recognizedTokenStr := fmt.Sprintf("%s Type: [%s]", literal, kwToken)
+					recognizedTokenStr := fmt.Sprintf("Keyword: %s, Literal: [%s]", kwType, literal)
 					fmt.Println(recognizedTokenStr)
 				}
 			} else if ttype == token.EOF {
 				break
 			} else {
-				otherText := fmt.Sprintf("%s Type: [%s]", ttype, literal)
+				otherText := fmt.Sprintf("Type: %s Literal: [%s]", ttype, literal)
 				fmt.Println(otherText)
 			}
 

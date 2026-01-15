@@ -59,6 +59,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.DOLLAR, p.parseVariableReference)
 	p.registerPrefix(token.FULLSTOP, p.parsePath)
 	p.registerPrefix(token.FSLASH, p.parsePath)
+	p.registerPrefix(token.TILDE, p.parseTilde)
 
 	// Register infix parse functions
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
@@ -216,8 +217,8 @@ func (p *Parser) parseCommandArguments() []ast.Expression {
 			args = append(args, p.parseStringLiteral())
 		} else if p.curTokenIs(token.INTEGER) {
 			args = append(args, p.parseIntegerLiteral())
-		} else if p.curTokenIs(token.FULLSTOP) || p.curTokenIs(token.FSLASH) {
-			// Path starting with . or /
+		} else if p.curTokenIs(token.FULLSTOP) || p.curTokenIs(token.FSLASH) || p.curTokenIs(token.TILDE) {
+			// Path starting with ., /, or ~
 			args = append(args, p.parsePath())
 		} else if p.curTokenIs(token.IDENT) {
 			// Check if this identifier is followed by path tokens (e.g., foo/bar, test.txt)
@@ -238,7 +239,7 @@ func (p *Parser) parseCommandArguments() []ast.Expression {
 // isArgumentToken returns true if the token type can be a command argument
 func (p *Parser) isArgumentToken(tt token.TokenType) bool {
 	switch tt {
-	case token.IDENT, token.STRING, token.INTEGER, token.DOLLAR, token.FULLSTOP, token.FSLASH:
+	case token.IDENT, token.STRING, token.INTEGER, token.DOLLAR, token.FULLSTOP, token.FSLASH, token.TILDE:
 		return true
 	default:
 		return false
@@ -324,6 +325,23 @@ func (p *Parser) parsePathFromIdent() ast.Expression {
 	return path
 }
 
+// parseTilde handles ~ - either as a path prefix (~/foo) or as a home command
+func (p *Parser) parseTilde() ast.Expression {
+	// If followed by FSLASH, it's a path like ~/foo
+	if p.peekTokenIs(token.FSLASH) {
+		return p.parsePath()
+	}
+
+	// Standalone ~ is a command to print/go to home directory
+	cmd := &ast.Command{
+		Token:     p.curToken,
+		Name:      p.curToken.Literal,
+		Type:      ast.CMD_TILDE,
+		Arguments: []ast.Expression{},
+	}
+	return cmd
+}
+
 func (p *Parser) parseVariableReference() ast.Expression {
 	vr := &ast.VariableReference{Token: p.curToken}
 
@@ -387,8 +405,8 @@ func (p *Parser) parseRedirectionTarget() ast.Expression {
 		// Plain identifier
 		return &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
-	case token.FULLSTOP, token.FSLASH:
-		// Path starting with . or /
+	case token.FULLSTOP, token.FSLASH, token.TILDE:
+		// Path starting with ., /, or ~
 		return p.parsePath()
 
 	case token.STRING:

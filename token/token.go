@@ -32,6 +32,7 @@ const (
 	OUT        TokenType = "OUT"
 	FULLSTOP   TokenType = "FULLSTOP"
 	FSLASH		 TokenType = "FSLASH"
+	TILDE			TokenType = "TILDE"
 )
 
 var TokenMap = map[string]TokenType{

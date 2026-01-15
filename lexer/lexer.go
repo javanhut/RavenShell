@@ -46,6 +46,8 @@ func (l *Lexer) NextToken() token.Token {
 		return token.Token{Type: token.PIPE, Literal: string(l.advance())}
 	case '.':
 		return token.Token{Type: token.FULLSTOP, Literal: string(l.advance())}
+	case '~':
+		return token.Token{Type: token.TILDE, Literal: string(l.advance())}
 	case '$':
 		return token.Token{Type: token.DOLLAR, Literal: string(l.advance())}
 	case '/':

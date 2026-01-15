@@ -59,7 +59,7 @@ func (e *Evaluator) evalExpression(expr ast.Expression) (string, error) {
 	case *ast.Identifier:
 		return node.Value, nil
 	case *ast.PathExpression:
-		return node.Value, nil
+		return e.resolvePath(node.Value), nil
 	case *ast.StringLiteral:
 		return node.Value, nil
 	case *ast.IntegerLiteral:
@@ -103,6 +103,8 @@ func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
 		return e.execPrint(args)
 	case ast.CMD_OUTPUT:
 		return e.execOutput(args)
+	case ast.CMD_TILDE:
+		return e.execHome()
 	default:
 		return "", fmt.Errorf("unknown command: %s", cmd.Name)
 	}
@@ -314,6 +316,16 @@ func (e *Evaluator) execWhoami() (string, error) {
 	return username, nil
 }
 
+
+func (e *Evaluator) execHome() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home: %v", err)
+	}
+	fmt.Fprintln(e.stdout, home)
+	return home, nil
+}
+
 func (e *Evaluator) execPrint(args []string) (string, error) {
 	// If we have stdin content (from pipe), print that
 	if e.stdin != os.Stdin {
@@ -347,6 +359,22 @@ func (e *Evaluator) execOutput(args []string) (string, error) {
 func (e *Evaluator) resolvePath(path string) string {
 	if len(path) == 0 {
 		return e.cwd
+	}
+
+	// Expand ~ to home directory
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return e.cwd
+		}
+		return home
+	}
+	if len(path) >= 2 && path[:2] == "~/" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return filepath.Clean(filepath.Join(e.cwd, path))
+		}
+		return filepath.Clean(filepath.Join(home, path[2:]))
 	}
 
 	// Absolute path

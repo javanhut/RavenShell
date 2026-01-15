@@ -43,6 +43,6 @@ var TokenMap = map[string]TokenType{
 	"cwd":    CURRENTDIR,
 	"whoami": WHOAMI,
 	"mkfile": MAKEFILE,
-	"out": OUTPUT,
+	"output": OUTPUT,
 	"print":  PRINT,
 }

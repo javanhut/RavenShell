@@ -1,12 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"ravenshell/evaluator"
 	"ravenshell/lexer"
 	"ravenshell/parser"
+	"ravenshell/readline"
 )
 
 func main() {
@@ -15,16 +14,19 @@ func main() {
 }
 
 func repl() {
-	scanner := bufio.NewScanner(os.Stdin)
 	eval := evaluator.New()
+	rl := readline.New("# ")
+
+	// Set up path completion to use evaluator's current directory
+	rl.SetCwdFunc(eval.GetCwd)
 
 	for {
-		fmt.Print("# ")
-		if !scanner.Scan() {
+		input, err := rl.ReadLine()
+		if err != nil {
+			// EOF or error
 			break
 		}
 
-		input := scanner.Text()
 		if input == "exit" || input == "quit" {
 			fmt.Println("Goodbye!")
 			break

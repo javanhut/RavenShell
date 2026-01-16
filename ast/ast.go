@@ -123,6 +123,7 @@ const (
 	CMD_OUTPUT     CommandType = "output"
 	CMD_PRINT      CommandType = "print"
 	CMD_SHOW       CommandType = "show"
+	CMD_CLEAR      CommandType = "clear"
 	CMD_TILDE      CommandType = "~"
 	CMD_EXTERNAL   CommandType = "external"
 )
@@ -193,5 +194,175 @@ func (re *RedirectionExpression) String() string {
 	out.WriteString(" " + string(re.Type) + " ")
 	out.WriteString(re.Target.String())
 	out.WriteString(")")
+	return out.String()
+}
+
+// AssignmentStatement represents variable assignment: x = value
+type AssignmentStatement struct {
+	Token token.Token // the ASSIGN token
+	Name  *Identifier
+	Value Expression
+}
+
+func (as *AssignmentStatement) statementNode()       {}
+func (as *AssignmentStatement) TokenLiteral() string { return as.Token.Literal }
+func (as *AssignmentStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString(as.Name.String())
+	out.WriteString(" = ")
+	if as.Value != nil {
+		out.WriteString(as.Value.String())
+	}
+	return out.String()
+}
+
+// BlockStatement represents a block of statements: { ... }
+type BlockStatement struct {
+	Token      token.Token // the LBRACE token
+	Statements []Statement
+}
+
+func (bs *BlockStatement) statementNode()       {}
+func (bs *BlockStatement) TokenLiteral() string { return bs.Token.Literal }
+func (bs *BlockStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("{ ")
+	for _, s := range bs.Statements {
+		out.WriteString(s.String())
+		out.WriteString(" ")
+	}
+	out.WriteString("}")
+	return out.String()
+}
+
+// ForStatement represents: for i in range(n) { ... }
+type ForStatement struct {
+	Token    token.Token     // the FOR token
+	Variable *Identifier     // loop variable
+	Iterable Expression      // the range/array to iterate over
+	Body     *BlockStatement // the loop body
+}
+
+func (fs *ForStatement) statementNode()       {}
+func (fs *ForStatement) TokenLiteral() string { return fs.Token.Literal }
+func (fs *ForStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("for ")
+	out.WriteString(fs.Variable.String())
+	out.WriteString(" in ")
+	out.WriteString(fs.Iterable.String())
+	out.WriteString(" ")
+	out.WriteString(fs.Body.String())
+	return out.String()
+}
+
+// IfStatement represents: if condition { ... } else { ... }
+type IfStatement struct {
+	Token       token.Token     // the IF token
+	Condition   Expression      // the condition
+	Consequence *BlockStatement // the if body
+	Alternative *BlockStatement // optional else body
+}
+
+func (is *IfStatement) statementNode()       {}
+func (is *IfStatement) TokenLiteral() string { return is.Token.Literal }
+func (is *IfStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("if ")
+	out.WriteString(is.Condition.String())
+	out.WriteString(" ")
+	out.WriteString(is.Consequence.String())
+	if is.Alternative != nil {
+		out.WriteString(" else ")
+		out.WriteString(is.Alternative.String())
+	}
+	return out.String()
+}
+
+// InfixExpression represents binary operations: left op right
+type InfixExpression struct {
+	Token    token.Token // the operator token
+	Left     Expression
+	Operator string
+	Right    Expression
+}
+
+func (ie *InfixExpression) expressionNode()      {}
+func (ie *InfixExpression) TokenLiteral() string { return ie.Token.Literal }
+func (ie *InfixExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(ie.Left.String())
+	out.WriteString(" " + ie.Operator + " ")
+	out.WriteString(ie.Right.String())
+	out.WriteString(")")
+	return out.String()
+}
+
+// CallExpression represents function calls: range(10), append(x, y)
+type CallExpression struct {
+	Token     token.Token  // the function name token
+	Function  string       // function name (range, append, etc.)
+	Arguments []Expression // function arguments
+}
+
+func (ce *CallExpression) expressionNode()      {}
+func (ce *CallExpression) TokenLiteral() string { return ce.Token.Literal }
+func (ce *CallExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString(ce.Function)
+	out.WriteString("(")
+	for i, arg := range ce.Arguments {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(arg.String())
+	}
+	out.WriteString(")")
+	return out.String()
+}
+
+// ArrayLiteral represents array literals: []string, [1, 2, 3]
+type ArrayLiteral struct {
+	Token    token.Token  // the LBRACKET token
+	Elements []Expression // array elements
+	TypeHint string       // optional type hint like "string", "int"
+}
+
+func (al *ArrayLiteral) expressionNode()      {}
+func (al *ArrayLiteral) TokenLiteral() string { return al.Token.Literal }
+func (al *ArrayLiteral) String() string {
+	var out bytes.Buffer
+	out.WriteString("[")
+	if al.TypeHint != "" {
+		out.WriteString("]" + al.TypeHint)
+	} else {
+		for i, el := range al.Elements {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			out.WriteString(el.String())
+		}
+		out.WriteString("]")
+	}
+	return out.String()
+}
+
+// IndexExpression represents array indexing: arr[0]
+type IndexExpression struct {
+	Token token.Token // the LBRACKET token
+	Left  Expression  // the array
+	Index Expression  // the index
+}
+
+func (ie *IndexExpression) expressionNode()      {}
+func (ie *IndexExpression) TokenLiteral() string { return ie.Token.Literal }
+func (ie *IndexExpression) String() string {
+	var out bytes.Buffer
+	out.WriteString("(")
+	out.WriteString(ie.Left.String())
+	out.WriteString("[")
+	out.WriteString(ie.Index.String())
+	out.WriteString("])")
 	return out.String()
 }

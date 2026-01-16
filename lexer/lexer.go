@@ -14,6 +14,16 @@ func NewLexer(input string) *Lexer {
 	return &Lexer{input: input, pos: 0}
 }
 
+// GetPos returns the current lexer position (for lookahead)
+func (l *Lexer) GetPos() int {
+	return l.pos
+}
+
+// SetPos sets the lexer position (for lookahead restoration)
+func (l *Lexer) SetPos(pos int) {
+	l.pos = pos
+}
+
 func (l *Lexer) peek() byte {
 	if l.pos >= len(l.input) {
 		return 0
@@ -41,6 +51,14 @@ func (l *Lexer) NextToken() token.Token {
 		return l.NextToken()
 	}
 
+	// Skip comments (from # to end of line)
+	if ch == '#' {
+		for l.peek() != '\n' && l.peek() != 0 {
+			l.advance()
+		}
+		return l.NextToken()
+	}
+
 	switch ch {
 	case '|':
 		return token.Token{Type: token.PIPE, Literal: string(l.advance())}
@@ -52,14 +70,58 @@ func (l *Lexer) NextToken() token.Token {
 		return token.Token{Type: token.DOLLAR, Literal: string(l.advance())}
 	case '/':
 		return token.Token{Type: token.FSLASH, Literal: string(l.advance())}
+	case '{':
+		return token.Token{Type: token.LBRACE, Literal: string(l.advance())}
+	case '}':
+		return token.Token{Type: token.RBRACE, Literal: string(l.advance())}
+	case '(':
+		return token.Token{Type: token.LPAREN, Literal: string(l.advance())}
+	case ')':
+		return token.Token{Type: token.RPAREN, Literal: string(l.advance())}
+	case '[':
+		return token.Token{Type: token.LBRACKET, Literal: string(l.advance())}
+	case ']':
+		return token.Token{Type: token.RBRACKET, Literal: string(l.advance())}
+	case ',':
+		return token.Token{Type: token.COMMA, Literal: string(l.advance())}
+	case '+':
+		return token.Token{Type: token.PLUS, Literal: string(l.advance())}
+	case '-':
+		return token.Token{Type: token.MINUS, Literal: string(l.advance())}
+	case '*':
+		return token.Token{Type: token.ASTERISK, Literal: string(l.advance())}
+	case '%':
+		return token.Token{Type: token.PERCENT, Literal: string(l.advance())}
+	case '=':
+		if l.peekNext() == '=' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.EQ, Literal: l.input[start:l.pos]}
+		}
+		return token.Token{Type: token.ASSIGN, Literal: string(l.advance())}
+	case '!':
+		if l.peekNext() == '=' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.NOT_EQ, Literal: l.input[start:l.pos]}
+		}
+		return token.Token{Type: token.ILLEGAL, Literal: string(l.advance())}
 	case '>':
 		if l.peekNext() == '>' {
 			start := l.pos
 			l.advance()
 			l.advance()
 			return token.Token{Type: token.INTO, Literal: l.input[start:l.pos]}
+		} else if l.peekNext() == '=' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.GTE, Literal: l.input[start:l.pos]}
 		} else {
-			return token.Token{Type: token.GREATER, Literal: string(l.advance())}
+			// Use GT for single > (parser will disambiguate comparison vs redirection)
+			return token.Token{Type: token.GT, Literal: string(l.advance())}
 		}
 	case '<':
 		if l.peekNext() == '<' {
@@ -67,8 +129,14 @@ func (l *Lexer) NextToken() token.Token {
 			l.advance()
 			l.advance()
 			return token.Token{Type: token.OUT, Literal: l.input[start:l.pos]}
+		} else if l.peekNext() == '=' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.LTE, Literal: l.input[start:l.pos]}
 		} else {
-			return token.Token{Type: token.LESS, Literal: string(l.advance())}
+			// Use LT for single < (parser will disambiguate comparison vs redirection)
+			return token.Token{Type: token.LT, Literal: string(l.advance())}
 		}
 	case '"':
 		// 1. Skip the opening quote
@@ -123,12 +191,17 @@ func (l *Lexer) NextToken() token.Token {
 			l.advance()
 		}
 		return token.Token{Type: token.INTEGER, Literal: l.input[start:l.pos]}
-	} else if unicode.IsLetter(rune(ch)) {
+	} else if unicode.IsLetter(rune(ch)) || ch == '_' {
 		start := l.pos
 		for isAlphanumeric(l.peek()) {
 			l.advance()
 		}
-		return token.Token{Type: token.IDENT, Literal: l.input[start:l.pos]}
+		literal := l.input[start:l.pos]
+		// Check if it's a keyword
+		if tokType, ok := token.TokenMap[literal]; ok {
+			return token.Token{Type: tokType, Literal: literal}
+		}
+		return token.Token{Type: token.IDENT, Literal: literal}
 	}
 	return token.Token{Type: token.ILLEGAL, Literal: string(l.advance())}
 }

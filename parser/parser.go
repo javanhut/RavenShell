@@ -266,7 +266,7 @@ func (p *Parser) parseCommand(cmdTokenType token.TokenType) ast.Expression {
 func (p *Parser) parseCommandArguments() []ast.Expression {
 	args := []ast.Expression{}
 
-	// Continue while next token is an argument (not an operator or statement start)
+	// Continue while next token can start an argument expression
 	for p.isArgumentToken(p.peekToken.Type) {
 		// Stop if we see IDENT followed by ASSIGN - that's a new assignment statement
 		if p.peekTokenIs(token.IDENT) && p.isNextAssignment() {
@@ -274,27 +274,9 @@ func (p *Parser) parseCommandArguments() []ast.Expression {
 		}
 
 		p.nextToken()
-
-		if p.curTokenIs(token.DOLLAR) {
-			args = append(args, p.parseVariableReference())
-		} else if p.curTokenIs(token.STRING) {
-			args = append(args, p.parseStringLiteral())
-		} else if p.curTokenIs(token.INTEGER) {
-			args = append(args, p.parseIntegerLiteral())
-		} else if p.curTokenIs(token.FULLSTOP) || p.curTokenIs(token.FSLASH) || p.curTokenIs(token.TILDE) {
-			// Path starting with ., /, or ~
-			args = append(args, p.parsePath())
-		} else if p.curTokenIs(token.IDENT) {
-			// Check if this identifier is followed by path tokens (e.g., foo/bar, test.txt)
-			if p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP) {
-				args = append(args, p.parsePathFromIdent())
-			} else {
-				args = append(args, &ast.Identifier{
-					Token: p.curToken,
-					Value: p.curToken.Literal,
-				})
-			}
-		}
+		// Parse a full expression (handles operators like +)
+		// Use PIPE precedence so pipes and redirects are not consumed
+		args = append(args, p.parseExpression(PIPE))
 	}
 
 	return args

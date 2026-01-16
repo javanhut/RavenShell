@@ -15,7 +15,7 @@ for i in range(10) {
 print "This is a raven shell script"
 
 # String concatenation with tilde expansion and variable
-print ~ + " - current working directory"
+print ~ + "RavenShell"
 
 # More examples:
 

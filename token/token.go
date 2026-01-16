@@ -26,6 +26,7 @@ const (
 	PIPE       TokenType = "PIPE"
 	DOLLAR     TokenType = "DOLLAR"
 	PRINT      TokenType = "PRINT"
+	SHOW       TokenType = "SHOW"
 	GREATER    TokenType = "GREATER"
 	INTO       TokenType = "INTO"
 	LESS       TokenType = "LESS"
@@ -46,4 +47,5 @@ var TokenMap = map[string]TokenType{
 	"mkfile": MAKEFILE,
 	"output": OUTPUT,
 	"print":  PRINT,
+	"show":   SHOW,
 }

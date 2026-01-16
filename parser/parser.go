@@ -443,6 +443,8 @@ func tokenTypeToCommandType(tt token.TokenType) ast.CommandType {
 		return ast.CMD_OUTPUT
 	case token.PRINT:
 		return ast.CMD_PRINT
+	case token.SHOW:
+		return ast.CMD_SHOW
 	default:
 		return ast.CMD_EXTERNAL
 	}

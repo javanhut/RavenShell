@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"ravenshell/ast"
 	"strconv"
+	"strings"
 )
 
 // Evaluator executes AST nodes
@@ -103,6 +104,8 @@ func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
 		return e.execPrint(args)
 	case ast.CMD_OUTPUT:
 		return e.execOutput(args)
+	case ast.CMD_SHOW:
+		return e.execShow(args)
 	case ast.CMD_TILDE:
 		return e.execHome()
 	default:
@@ -337,21 +340,35 @@ func (e *Evaluator) execPrint(args []string) (string, error) {
 		return string(content), nil
 	}
 
-	// Otherwise print arguments
-	output := ""
-	for i, arg := range args {
-		if i > 0 {
-			output += " "
-		}
-		output += arg
-	}
-	fmt.Fprintln(e.stdout, output)
-	return output, nil
+	// Print arguments as text (like echo)
+	result := strings.Join(args, " ") + "\n"
+	fmt.Fprint(e.stdout, result)
+	return result, nil
 }
 
 func (e *Evaluator) execOutput(args []string) (string, error) {
 	// Same as print for now
 	return e.execPrint(args)
+}
+
+func (e *Evaluator) execShow(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("show: missing file argument")
+	}
+
+	var output bytes.Buffer
+	for _, arg := range args {
+		path := e.resolvePath(arg)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("show: %v", err)
+		}
+		output.Write(content)
+	}
+
+	result := output.String()
+	fmt.Fprint(e.stdout, result)
+	return result, nil
 }
 
 // Helper functions

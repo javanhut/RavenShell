@@ -122,6 +122,7 @@ const (
 	CMD_MAKEFILE   CommandType = "mkfile"
 	CMD_OUTPUT     CommandType = "output"
 	CMD_PRINT      CommandType = "print"
+	CMD_SHOW       CommandType = "show"
 	CMD_TILDE      CommandType = "~"
 	CMD_EXTERNAL   CommandType = "external"
 )

@@ -12,24 +12,29 @@ import (
 const (
 	_ int = iota
 	LOWEST
+	OR_PREC     // ||
+	AND_PREC    // &&
 	REDIRECT    // >, >>, <
 	PIPE        // |
 	EQUALS      // ==, !=
 	LESSGREATER // <, >
 	SUM         // +, -
 	PRODUCT     // *, /, %
-	PREFIX      // $ (variable reference)
+	PREFIX      // $, !
 	INDEX       // array[index]
 	COMMAND     // commands
 )
 
 // Precedence table for infix operators
 var precedences = map[token.TokenType]int{
+	token.OR:       OR_PREC,
+	token.AND:      AND_PREC,
 	token.PIPE:     PIPE,
 	token.INTO:     REDIRECT,
 	token.OUT:      REDIRECT,
-	token.EQ:       EQUALS,
-	token.NOT_EQ:   EQUALS,
+	token.EQ:          EQUALS,
+	token.NOT_EQ:      EQUALS,
+	token.REGEX_MATCH: EQUALS,
 	token.LT:       REDIRECT, // Low precedence so redirections bind looser than pipes
 	token.GT:       REDIRECT, // Low precedence so redirections bind looser than pipes
 	token.LTE:      LESSGREATER,
@@ -38,6 +43,7 @@ var precedences = map[token.TokenType]int{
 	token.MINUS:    SUM,
 	token.ASTERISK: PRODUCT,
 	token.PERCENT:  PRODUCT,
+	token.FSLASH:   PRODUCT,
 	token.LBRACKET: INDEX,
 }
 
@@ -78,6 +84,10 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.RANGE, p.parseCallExpression)
 	p.registerPrefix(token.APPEND, p.parseCallExpression)
 	p.registerPrefix(token.LPAREN, p.parseGroupedExpression)
+	p.registerPrefix(token.TRUE, p.parseBooleanLiteral)
+	p.registerPrefix(token.FALSE, p.parseBooleanLiteral)
+	p.registerPrefix(token.NOT, p.parsePrefixExpression)
+	p.registerPrefix(token.LBRACE, p.parseDictLiteral)
 
 	// Register command keywords as prefix parse functions
 	p.registerPrefix(token.LIST, p.parseCommandKeyword)
@@ -95,6 +105,8 @@ func New(l *lexer.Lexer) *Parser {
 
 	// Register infix parse functions
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
+	p.registerInfix(token.AND, p.parseInfixExpression)
+	p.registerInfix(token.OR, p.parseInfixExpression)
 	p.registerInfix(token.PIPE, p.parsePipeExpression)
 	p.registerInfix(token.INTO, p.parseRedirectionExpression)
 	p.registerInfix(token.OUT, p.parseRedirectionExpression)
@@ -104,11 +116,13 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerInfix(token.PERCENT, p.parseInfixExpression)
 	p.registerInfix(token.EQ, p.parseInfixExpression)
 	p.registerInfix(token.NOT_EQ, p.parseInfixExpression)
+	p.registerInfix(token.REGEX_MATCH, p.parseInfixExpression)
 	p.registerInfix(token.LT, p.parseComparisonOrRedirection)
 	p.registerInfix(token.GT, p.parseComparisonOrRedirection)
 	p.registerInfix(token.LTE, p.parseInfixExpression)
 	p.registerInfix(token.GTE, p.parseInfixExpression)
 	p.registerInfix(token.LBRACKET, p.parseIndexExpression)
+	p.registerInfix(token.FSLASH, p.parseDivisionOrPath)
 
 	// Read two tokens to initialize curToken and peekToken
 	p.nextToken()
@@ -190,6 +204,16 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseForStatement()
 	case token.IF:
 		return p.parseIfStatement()
+	case token.BREAK:
+		return &ast.BreakStatement{Token: p.curToken}
+	case token.CONTINUE:
+		return &ast.ContinueStatement{Token: p.curToken}
+	case token.FUNCTION:
+		return p.parseFunctionStatement()
+	case token.RETURN:
+		return p.parseReturnStatement()
+	case token.SWITCH:
+		return p.parseSwitchStatement()
 	case token.IDENT:
 		// Check if this is an assignment (IDENT = value)
 		if p.peekTokenIs(token.ASSIGN) {
@@ -236,6 +260,11 @@ func (p *Parser) parseIdentifierOrCommand() ast.Expression {
 		return p.parseCommand(cmdType)
 	}
 
+	// Check if this is a function call (identifier followed by lparen)
+	if p.peekTokenIs(token.LPAREN) {
+		return p.parseUserFunctionCall()
+	}
+
 	// Check if this identifier is followed by path tokens (e.g., file.txt, foo/bar)
 	if p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP) {
 		return p.parsePathFromIdent()
@@ -243,6 +272,19 @@ func (p *Parser) parseIdentifierOrCommand() ast.Expression {
 
 	// Otherwise, it's a regular identifier
 	return &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+}
+
+// parseUserFunctionCall parses: name(args)
+func (p *Parser) parseUserFunctionCall() ast.Expression {
+	exp := &ast.CallExpression{Token: p.curToken, Function: p.curToken.Literal}
+
+	if !p.expectPeek(token.LPAREN) {
+		return nil
+	}
+
+	exp.Arguments = p.parseExpressionList(token.RPAREN)
+
+	return exp
 }
 
 // parseCommandKeyword handles command keyword tokens (LIST, REMOVE, etc.)
@@ -305,7 +347,8 @@ func (p *Parser) isNextAssignment() bool {
 // isArgumentToken returns true if the token type can be a command argument
 func (p *Parser) isArgumentToken(tt token.TokenType) bool {
 	switch tt {
-	case token.IDENT, token.STRING, token.INTEGER, token.DOLLAR, token.FULLSTOP, token.FSLASH, token.TILDE:
+	case token.IDENT, token.STRING, token.INTEGER, token.DOLLAR, token.FULLSTOP, token.FSLASH, token.TILDE,
+		token.LPAREN, token.LBRACKET, token.LBRACE, token.TRUE, token.FALSE, token.NOT:
 		return true
 	default:
 		return false
@@ -338,6 +381,22 @@ func (p *Parser) parseIntegerLiteral() ast.Expression {
 
 func (p *Parser) parseStringLiteral() ast.Expression {
 	return &ast.StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+}
+
+func (p *Parser) parseBooleanLiteral() ast.Expression {
+	return &ast.BooleanLiteral{Token: p.curToken, Value: p.curTokenIs(token.TRUE)}
+}
+
+func (p *Parser) parsePrefixExpression() ast.Expression {
+	expression := &ast.PrefixExpression{
+		Token:    p.curToken,
+		Operator: p.curToken.Literal,
+	}
+
+	p.nextToken()
+	expression.Right = p.parseExpression(PREFIX)
+
+	return expression
 }
 
 // parsePath parses a file path (./foo, ../bar, /absolute/path, etc.)
@@ -519,6 +578,129 @@ func tokenTypeToCommandType(tt token.TokenType) ast.CommandType {
 	}
 }
 
+// parseFunctionStatement parses: fn name(params) { body }
+func (p *Parser) parseFunctionStatement() *ast.FunctionStatement {
+	stmt := &ast.FunctionStatement{Token: p.curToken}
+
+	if !p.expectPeek(token.IDENT) {
+		return nil
+	}
+	stmt.Name = &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	if !p.expectPeek(token.LPAREN) {
+		return nil
+	}
+
+	stmt.Parameters = p.parseFunctionParameters()
+
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+
+	stmt.Body = p.parseBlockStatement()
+
+	return stmt
+}
+
+// parseFunctionParameters parses function parameter list
+func (p *Parser) parseFunctionParameters() []*ast.Identifier {
+	params := []*ast.Identifier{}
+
+	if p.peekTokenIs(token.RPAREN) {
+		p.nextToken()
+		return params
+	}
+
+	p.nextToken()
+	params = append(params, &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal})
+
+	for p.peekTokenIs(token.COMMA) {
+		p.nextToken()
+		p.nextToken()
+		params = append(params, &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal})
+	}
+
+	if !p.expectPeek(token.RPAREN) {
+		return nil
+	}
+
+	return params
+}
+
+// parseReturnStatement parses: return [value]
+func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
+	stmt := &ast.ReturnStatement{Token: p.curToken}
+
+	// Check if there's a return value (not at end of block)
+	if !p.peekTokenIs(token.RBRACE) && !p.peekTokenIs(token.EOF) {
+		p.nextToken()
+		stmt.Value = p.parseExpression(LOWEST)
+	}
+
+	return stmt
+}
+
+// parseSwitchStatement parses: switch expr { case val: { ... } default { ... } }
+func (p *Parser) parseSwitchStatement() *ast.SwitchStatement {
+	stmt := &ast.SwitchStatement{Token: p.curToken}
+
+	p.nextToken()
+	stmt.Value = p.parseExpression(LOWEST)
+
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+
+	stmt.Cases = []*ast.CaseClause{}
+
+	p.nextToken()
+	for !p.curTokenIs(token.RBRACE) && !p.curTokenIs(token.EOF) {
+		switch p.curToken.Type {
+		case token.CASE:
+			caseClause := p.parseCaseClause()
+			if caseClause != nil {
+				stmt.Cases = append(stmt.Cases, caseClause)
+			}
+		case token.DEFAULT:
+			p.nextToken() // move past default
+			if p.curTokenIs(token.LBRACE) {
+				stmt.Default = p.parseBlockStatement()
+			}
+		}
+		p.nextToken()
+	}
+
+	return stmt
+}
+
+// parseCaseClause parses: case val1, val2: { ... }
+func (p *Parser) parseCaseClause() *ast.CaseClause {
+	clause := &ast.CaseClause{Token: p.curToken}
+	clause.Values = []ast.Expression{}
+
+	p.nextToken() // move past case
+	clause.Values = append(clause.Values, p.parseExpression(LOWEST))
+
+	// Handle multiple values: case 1, 2, 3:
+	for p.peekTokenIs(token.COMMA) {
+		p.nextToken() // comma
+		p.nextToken() // next value
+		clause.Values = append(clause.Values, p.parseExpression(LOWEST))
+	}
+
+	if !p.expectPeek(token.COLON) {
+		return nil
+	}
+
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+
+	clause.Body = p.parseBlockStatement()
+
+	return clause
+}
+
 // parseAssignmentStatement parses: identifier = expression
 func (p *Parser) parseAssignmentStatement() *ast.AssignmentStatement {
 	stmt := &ast.AssignmentStatement{Token: p.curToken}
@@ -688,6 +870,48 @@ func (p *Parser) parseExpressionList(end token.TokenType) []ast.Expression {
 	return list
 }
 
+// parseDictLiteral parses: {key: value, ...}
+func (p *Parser) parseDictLiteral() ast.Expression {
+	dict := &ast.DictLiteral{Token: p.curToken}
+	dict.Pairs = make(map[ast.Expression]ast.Expression)
+
+	// Empty dict
+	if p.peekTokenIs(token.RBRACE) {
+		p.nextToken()
+		return dict
+	}
+
+	p.nextToken()
+
+	// Parse first key-value pair
+	key := p.parseExpression(LOWEST)
+	if !p.expectPeek(token.COLON) {
+		return nil
+	}
+	p.nextToken()
+	value := p.parseExpression(LOWEST)
+	dict.Pairs[key] = value
+
+	// Parse remaining pairs
+	for p.peekTokenIs(token.COMMA) {
+		p.nextToken() // consume comma
+		p.nextToken() // move to next key
+		key := p.parseExpression(LOWEST)
+		if !p.expectPeek(token.COLON) {
+			return nil
+		}
+		p.nextToken()
+		value := p.parseExpression(LOWEST)
+		dict.Pairs[key] = value
+	}
+
+	if !p.expectPeek(token.RBRACE) {
+		return nil
+	}
+
+	return dict
+}
+
 // parseArrayLiteral parses: [elements] or []type
 func (p *Parser) parseArrayLiteral() ast.Expression {
 	array := &ast.ArrayLiteral{Token: p.curToken}
@@ -746,5 +970,36 @@ func (p *Parser) expectPeek(t token.TokenType) bool {
 		return true
 	}
 	p.peekError(t)
+	return false
+}
+
+// parseDivisionOrPath handles FSLASH which can be division or part of a path
+func (p *Parser) parseDivisionOrPath(left ast.Expression) ast.Expression {
+	// If left is numeric-like, treat as division
+	if p.isNumericExpression(left) {
+		return p.parseInfixExpression(left)
+	}
+	// Otherwise, don't consume as infix - let it be parsed as a path
+	return left
+}
+
+// isNumericExpression returns true if the expression is likely numeric
+func (p *Parser) isNumericExpression(expr ast.Expression) bool {
+	switch e := expr.(type) {
+	case *ast.IntegerLiteral:
+		return true
+	case *ast.VariableReference:
+		return true
+	case *ast.CallExpression:
+		return true
+	case *ast.InfixExpression:
+		// Arithmetic operators produce numbers
+		switch e.Operator {
+		case "+", "-", "*", "/", "%":
+			return true
+		}
+	case *ast.IndexExpression:
+		return true
+	}
 	return false
 }

@@ -2,36 +2,62 @@ package evaluator
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"ravenshell/ast"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
+// Sentinel errors for control flow
+var (
+	errBreak    = errors.New("break")
+	errContinue = errors.New("continue")
+)
+
+// returnValue wraps a return value for propagation
+type returnValue struct {
+	Value Value
+}
+
+func (rv *returnValue) Error() string {
+	return "return"
+}
+
 // Value represents any value in the shell
 type Value interface{}
 
+// Function represents a user-defined function
+type Function struct {
+	Parameters []*ast.Identifier
+	Body       *ast.BlockStatement
+	Env        map[string]Value // closure environment
+}
+
 // Evaluator executes AST nodes
 type Evaluator struct {
-	cwd    string            // Current working directory
-	env    map[string]string // Environment variables (for $VAR)
-	vars   map[string]Value  // Script variables
-	stdout io.Writer         // Standard output (for redirections)
-	stdin  io.Reader         // Standard input (for redirections)
+	cwd       string               // Current working directory
+	env       map[string]string    // Environment variables (for $VAR)
+	vars      map[string]Value     // Script variables
+	functions map[string]*Function // User-defined functions
+	stdout    io.Writer            // Standard output (for redirections)
+	stdin     io.Reader            // Standard input (for redirections)
 }
 
 // New creates a new Evaluator
 func New() *Evaluator {
 	cwd, _ := os.Getwd()
 	return &Evaluator{
-		cwd:    cwd,
-		env:    make(map[string]string),
-		vars:   make(map[string]Value),
-		stdout: os.Stdout,
-		stdin:  os.Stdin,
+		cwd:       cwd,
+		env:       make(map[string]string),
+		vars:      make(map[string]Value),
+		functions: make(map[string]*Function),
+		stdout:    os.Stdout,
+		stdin:     os.Stdin,
 	}
 }
 
@@ -56,6 +82,16 @@ func (e *Evaluator) evalStatement(stmt ast.Statement) error {
 		return e.evalForStatement(s)
 	case *ast.IfStatement:
 		return e.evalIfStatement(s)
+	case *ast.BreakStatement:
+		return errBreak
+	case *ast.ContinueStatement:
+		return errContinue
+	case *ast.FunctionStatement:
+		return e.evalFunctionStatement(s)
+	case *ast.ReturnStatement:
+		return e.evalReturnStatement(s)
+	case *ast.SwitchStatement:
+		return e.evalSwitchStatement(s)
 	}
 	return nil
 }
@@ -94,6 +130,12 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 		return e.evalArrayLiteral(node)
 	case *ast.IndexExpression:
 		return e.evalIndexExpression(node)
+	case *ast.BooleanLiteral:
+		return node.Value, nil
+	case *ast.PrefixExpression:
+		return e.evalPrefixExpression(node)
+	case *ast.DictLiteral:
+		return e.evalDictLiteral(node)
 	}
 	return nil, fmt.Errorf("unknown expression type: %T", expr)
 }
@@ -127,6 +169,12 @@ func (e *Evaluator) valueToString(val Value) string {
 			strs[i] = e.valueToString(elem)
 		}
 		return "[" + strings.Join(strs, ", ") + "]"
+	case map[string]Value:
+		pairs := make([]string, 0, len(v))
+		for key, val := range v {
+			pairs = append(pairs, fmt.Sprintf("%q: %s", key, e.valueToString(val)))
+		}
+		return "{" + strings.Join(pairs, ", ") + "}"
 	case nil:
 		return ""
 	default:
@@ -559,12 +607,60 @@ func (e *Evaluator) evalForStatement(stmt *ast.ForStatement) error {
 	// Iterate
 	for _, item := range items {
 		e.vars[stmt.Variable.Value] = item
-		if err := e.evalBlockStatement(stmt.Body); err != nil {
+		err := e.evalBlockStatement(stmt.Body)
+		if err == errBreak {
+			break
+		}
+		if err == errContinue {
+			continue
+		}
+		if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// evalSwitchStatement handles switch/match statements
+func (e *Evaluator) evalSwitchStatement(stmt *ast.SwitchStatement) error {
+	switchVal, err := e.evalExpressionValue(stmt.Value)
+	if err != nil {
+		return err
+	}
+
+	// Try to match each case
+	for _, caseClause := range stmt.Cases {
+		for _, caseVal := range caseClause.Values {
+			val, err := e.evalExpressionValue(caseVal)
+			if err != nil {
+				return err
+			}
+			if e.valuesEqual(switchVal, val) {
+				return e.evalBlockStatement(caseClause.Body)
+			}
+		}
+	}
+
+	// No case matched, try default
+	if stmt.Default != nil {
+		return e.evalBlockStatement(stmt.Default)
+	}
+
+	return nil
+}
+
+// valuesEqual compares two values for equality
+func (e *Evaluator) valuesEqual(a, b Value) bool {
+	// Try numeric comparison first
+	aNum, aErr := e.valueToInt64(a)
+	bNum, bErr := e.valueToInt64(b)
+	if aErr == nil && bErr == nil {
+		return aNum == bNum
+	}
+
+	// Fall back to string comparison
+	return e.valueToString(a) == e.valueToString(b)
 }
 
 // evalIfStatement handles conditionals: if cond { ... } else { ... }
@@ -593,8 +689,53 @@ func (e *Evaluator) evalBlockStatement(block *ast.BlockStatement) error {
 	return nil
 }
 
+// evalPrefixExpression handles unary operators: !expr
+func (e *Evaluator) evalPrefixExpression(node *ast.PrefixExpression) (Value, error) {
+	right, err := e.evalExpressionValue(node.Right)
+	if err != nil {
+		return nil, err
+	}
+
+	switch node.Operator {
+	case "!":
+		return !e.valueToBool(right), nil
+	}
+	return nil, fmt.Errorf("unknown prefix operator: %s", node.Operator)
+}
+
 // evalInfixExpression handles binary operations: left op right
 func (e *Evaluator) evalInfixExpression(node *ast.InfixExpression) (Value, error) {
+	// Short-circuit evaluation for logical operators
+	if node.Operator == "&&" {
+		left, err := e.evalExpressionValue(node.Left)
+		if err != nil {
+			return nil, err
+		}
+		if !e.valueToBool(left) {
+			return false, nil
+		}
+		right, err := e.evalExpressionValue(node.Right)
+		if err != nil {
+			return nil, err
+		}
+		return e.valueToBool(right), nil
+	}
+
+	if node.Operator == "||" {
+		left, err := e.evalExpressionValue(node.Left)
+		if err != nil {
+			return nil, err
+		}
+		if e.valueToBool(left) {
+			return true, nil
+		}
+		right, err := e.evalExpressionValue(node.Right)
+		if err != nil {
+			return nil, err
+		}
+		return e.valueToBool(right), nil
+	}
+
 	left, err := e.evalExpressionValue(node.Left)
 	if err != nil {
 		return nil, err
@@ -663,21 +804,558 @@ func (e *Evaluator) evalInfixExpression(node *ast.InfixExpression) (Value, error
 		return leftStr != rightStr, nil
 	case "+":
 		return leftStr + rightStr, nil
+	case "=~":
+		// Regex match: left =~ pattern
+		re, err := regexp.Compile(rightStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex: %v", err)
+		}
+		return re.MatchString(leftStr), nil
 	}
 
 	return nil, fmt.Errorf("unknown operator: %s", node.Operator)
 }
 
-// evalCallExpression handles function calls: range(n), append(arr, val)
+// evalFunctionStatement registers a user-defined function
+func (e *Evaluator) evalFunctionStatement(stmt *ast.FunctionStatement) error {
+	fn := &Function{
+		Parameters: stmt.Parameters,
+		Body:       stmt.Body,
+		Env:        make(map[string]Value),
+	}
+	// Copy current variables for closure
+	for k, v := range e.vars {
+		fn.Env[k] = v
+	}
+	e.functions[stmt.Name.Value] = fn
+	return nil
+}
+
+// evalReturnStatement handles return statements
+func (e *Evaluator) evalReturnStatement(stmt *ast.ReturnStatement) error {
+	var val Value = nil
+	if stmt.Value != nil {
+		var err error
+		val, err = e.evalExpressionValue(stmt.Value)
+		if err != nil {
+			return err
+		}
+	}
+	return &returnValue{Value: val}
+}
+
+// evalCallExpression handles function calls: range(n), append(arr, val), user functions
 func (e *Evaluator) evalCallExpression(node *ast.CallExpression) (Value, error) {
+	// Check for user-defined function first
+	if fn, ok := e.functions[node.Function]; ok {
+		return e.callUserFunction(fn, node.Arguments)
+	}
+
+	// Built-in functions
 	switch node.Function {
 	case "range":
 		return e.builtinRange(node.Arguments)
 	case "append":
 		return e.builtinAppend(node.Arguments)
+	// String functions
+	case "len":
+		return e.builtinLen(node.Arguments)
+	case "split":
+		return e.builtinSplit(node.Arguments)
+	case "trim":
+		return e.builtinTrim(node.Arguments)
+	case "upper":
+		return e.builtinUpper(node.Arguments)
+	case "lower":
+		return e.builtinLower(node.Arguments)
+	case "contains":
+		return e.builtinContains(node.Arguments)
+	case "replace":
+		return e.builtinReplace(node.Arguments)
+	// Array functions
+	case "slice":
+		return e.builtinSlice(node.Arguments)
+	case "pop":
+		return e.builtinPop(node.Arguments)
+	case "push":
+		return e.builtinAppend(node.Arguments) // alias for append
+	case "first":
+		return e.builtinFirst(node.Arguments)
+	case "last":
+		return e.builtinLast(node.Arguments)
+	case "join":
+		return e.builtinJoin(node.Arguments)
+	// Regex functions
+	case "regex_match":
+		return e.builtinRegexMatch(node.Arguments)
+	case "regex_find":
+		return e.builtinRegexFind(node.Arguments)
+	case "regex_replace":
+		return e.builtinRegexReplace(node.Arguments)
 	default:
 		return nil, fmt.Errorf("unknown function: %s", node.Function)
 	}
+}
+
+// callUserFunction executes a user-defined function
+func (e *Evaluator) callUserFunction(fn *Function, args []ast.Expression) (Value, error) {
+	if len(args) != len(fn.Parameters) {
+		return nil, fmt.Errorf("wrong number of arguments: expected %d, got %d", len(fn.Parameters), len(args))
+	}
+
+	// Save current vars
+	savedVars := e.vars
+	e.vars = make(map[string]Value)
+
+	// Copy closure environment
+	for k, v := range fn.Env {
+		e.vars[k] = v
+	}
+
+	// Bind arguments to parameters
+	for i, param := range fn.Parameters {
+		val, err := evalExpressionInEnv(e, args[i], savedVars)
+		if err != nil {
+			e.vars = savedVars
+			return nil, err
+		}
+		e.vars[param.Value] = val
+	}
+
+	// Execute function body
+	err := e.evalBlockStatement(fn.Body)
+
+	// Restore vars
+	e.vars = savedVars
+
+	// Handle return value
+	if rv, ok := err.(*returnValue); ok {
+		return rv.Value, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+// evalExpressionInEnv evaluates an expression using a specific variable environment
+func evalExpressionInEnv(e *Evaluator, expr ast.Expression, vars map[string]Value) (Value, error) {
+	savedVars := e.vars
+	e.vars = vars
+	val, err := e.evalExpressionValue(expr)
+	e.vars = savedVars
+	return val, err
+}
+
+// builtinLen implements len(s) - returns length of string or array
+func (e *Evaluator) builtinLen(args []ast.Expression) (Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("len() takes exactly 1 argument")
+	}
+
+	val, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	switch v := val.(type) {
+	case string:
+		return int64(len(v)), nil
+	case []Value:
+		return int64(len(v)), nil
+	default:
+		return nil, fmt.Errorf("len() argument must be string or array")
+	}
+}
+
+// builtinSplit implements split(s, sep) - splits string into array
+func (e *Evaluator) builtinSplit(args []ast.Expression) (Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("split() takes exactly 2 arguments")
+	}
+
+	strVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	str, ok := strVal.(string)
+	if !ok {
+		return nil, fmt.Errorf("split() first argument must be a string")
+	}
+
+	sepVal, err := e.evalExpressionValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	sep, ok := sepVal.(string)
+	if !ok {
+		return nil, fmt.Errorf("split() second argument must be a string")
+	}
+
+	parts := strings.Split(str, sep)
+	result := make([]Value, len(parts))
+	for i, part := range parts {
+		result[i] = part
+	}
+	return result, nil
+}
+
+// builtinTrim implements trim(s) - removes leading/trailing whitespace
+func (e *Evaluator) builtinTrim(args []ast.Expression) (Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("trim() takes exactly 1 argument")
+	}
+
+	val, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	str, ok := val.(string)
+	if !ok {
+		return nil, fmt.Errorf("trim() argument must be a string")
+	}
+
+	return strings.TrimSpace(str), nil
+}
+
+// builtinUpper implements upper(s) - converts to uppercase
+func (e *Evaluator) builtinUpper(args []ast.Expression) (Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("upper() takes exactly 1 argument")
+	}
+
+	val, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	str, ok := val.(string)
+	if !ok {
+		return nil, fmt.Errorf("upper() argument must be a string")
+	}
+
+	return strings.ToUpper(str), nil
+}
+
+// builtinLower implements lower(s) - converts to lowercase
+func (e *Evaluator) builtinLower(args []ast.Expression) (Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("lower() takes exactly 1 argument")
+	}
+
+	val, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+
+	str, ok := val.(string)
+	if !ok {
+		return nil, fmt.Errorf("lower() argument must be a string")
+	}
+
+	return strings.ToLower(str), nil
+}
+
+// builtinContains implements contains(s, sub) - checks if string contains substring
+func (e *Evaluator) builtinContains(args []ast.Expression) (Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("contains() takes exactly 2 arguments")
+	}
+
+	strVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	str, ok := strVal.(string)
+	if !ok {
+		return nil, fmt.Errorf("contains() first argument must be a string")
+	}
+
+	subVal, err := e.evalExpressionValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	sub, ok := subVal.(string)
+	if !ok {
+		return nil, fmt.Errorf("contains() second argument must be a string")
+	}
+
+	return strings.Contains(str, sub), nil
+}
+
+// builtinReplace implements replace(s, old, new) - replaces all occurrences
+func (e *Evaluator) builtinReplace(args []ast.Expression) (Value, error) {
+	if len(args) != 3 {
+		return nil, fmt.Errorf("replace() takes exactly 3 arguments")
+	}
+
+	strVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	str, ok := strVal.(string)
+	if !ok {
+		return nil, fmt.Errorf("replace() first argument must be a string")
+	}
+
+	oldVal, err := e.evalExpressionValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	old, ok := oldVal.(string)
+	if !ok {
+		return nil, fmt.Errorf("replace() second argument must be a string")
+	}
+
+	newVal, err := e.evalExpressionValue(args[2])
+	if err != nil {
+		return nil, err
+	}
+	newStr, ok := newVal.(string)
+	if !ok {
+		return nil, fmt.Errorf("replace() third argument must be a string")
+	}
+
+	return strings.ReplaceAll(str, old, newStr), nil
+}
+
+// builtinSlice implements slice(arr, start, end?) - returns subarray
+func (e *Evaluator) builtinSlice(args []ast.Expression) (Value, error) {
+	if len(args) < 2 || len(args) > 3 {
+		return nil, fmt.Errorf("slice() takes 2 or 3 arguments")
+	}
+
+	arrVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	arr, ok := arrVal.([]Value)
+	if !ok {
+		return nil, fmt.Errorf("slice() first argument must be an array")
+	}
+
+	startVal, err := e.evalExpressionValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	start, err := e.valueToInt64(startVal)
+	if err != nil {
+		return nil, fmt.Errorf("slice() second argument must be an integer")
+	}
+
+	end := int64(len(arr))
+	if len(args) == 3 {
+		endVal, err := e.evalExpressionValue(args[2])
+		if err != nil {
+			return nil, err
+		}
+		end, err = e.valueToInt64(endVal)
+		if err != nil {
+			return nil, fmt.Errorf("slice() third argument must be an integer")
+		}
+	}
+
+	// Bounds checking
+	if start < 0 {
+		start = 0
+	}
+	if end > int64(len(arr)) {
+		end = int64(len(arr))
+	}
+	if start > end {
+		return []Value{}, nil
+	}
+
+	result := make([]Value, end-start)
+	copy(result, arr[start:end])
+	return result, nil
+}
+
+// builtinPop implements pop(arr) - returns last element
+func (e *Evaluator) builtinPop(args []ast.Expression) (Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("pop() takes exactly 1 argument")
+	}
+
+	arrVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	arr, ok := arrVal.([]Value)
+	if !ok {
+		return nil, fmt.Errorf("pop() argument must be an array")
+	}
+
+	if len(arr) == 0 {
+		return nil, fmt.Errorf("pop() on empty array")
+	}
+
+	return arr[len(arr)-1], nil
+}
+
+// builtinFirst implements first(arr) - returns first element
+func (e *Evaluator) builtinFirst(args []ast.Expression) (Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("first() takes exactly 1 argument")
+	}
+
+	arrVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	arr, ok := arrVal.([]Value)
+	if !ok {
+		return nil, fmt.Errorf("first() argument must be an array")
+	}
+
+	if len(arr) == 0 {
+		return nil, fmt.Errorf("first() on empty array")
+	}
+
+	return arr[0], nil
+}
+
+// builtinLast implements last(arr) - returns last element
+func (e *Evaluator) builtinLast(args []ast.Expression) (Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("last() takes exactly 1 argument")
+	}
+
+	arrVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	arr, ok := arrVal.([]Value)
+	if !ok {
+		return nil, fmt.Errorf("last() argument must be an array")
+	}
+
+	if len(arr) == 0 {
+		return nil, fmt.Errorf("last() on empty array")
+	}
+
+	return arr[len(arr)-1], nil
+}
+
+// builtinJoin implements join(arr, sep) - joins array into string
+func (e *Evaluator) builtinJoin(args []ast.Expression) (Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("join() takes exactly 2 arguments")
+	}
+
+	arrVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	arr, ok := arrVal.([]Value)
+	if !ok {
+		return nil, fmt.Errorf("join() first argument must be an array")
+	}
+
+	sepVal, err := e.evalExpressionValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	sep, ok := sepVal.(string)
+	if !ok {
+		return nil, fmt.Errorf("join() second argument must be a string")
+	}
+
+	strs := make([]string, len(arr))
+	for i, v := range arr {
+		strs[i] = e.valueToString(v)
+	}
+	return strings.Join(strs, sep), nil
+}
+
+// builtinRegexMatch implements regex_match(text, pattern) - returns bool
+func (e *Evaluator) builtinRegexMatch(args []ast.Expression) (Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("regex_match() takes exactly 2 arguments")
+	}
+
+	textVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	text := e.valueToString(textVal)
+
+	patternVal, err := e.evalExpressionValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	pattern := e.valueToString(patternVal)
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex: %v", err)
+	}
+
+	return re.MatchString(text), nil
+}
+
+// builtinRegexFind implements regex_find(text, pattern) - returns array of matches
+func (e *Evaluator) builtinRegexFind(args []ast.Expression) (Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("regex_find() takes exactly 2 arguments")
+	}
+
+	textVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	text := e.valueToString(textVal)
+
+	patternVal, err := e.evalExpressionValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	pattern := e.valueToString(patternVal)
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex: %v", err)
+	}
+
+	matches := re.FindAllString(text, -1)
+	result := make([]Value, len(matches))
+	for i, m := range matches {
+		result[i] = m
+	}
+	return result, nil
+}
+
+// builtinRegexReplace implements regex_replace(text, pattern, replacement) - returns replaced string
+func (e *Evaluator) builtinRegexReplace(args []ast.Expression) (Value, error) {
+	if len(args) != 3 {
+		return nil, fmt.Errorf("regex_replace() takes exactly 3 arguments")
+	}
+
+	textVal, err := e.evalExpressionValue(args[0])
+	if err != nil {
+		return nil, err
+	}
+	text := e.valueToString(textVal)
+
+	patternVal, err := e.evalExpressionValue(args[1])
+	if err != nil {
+		return nil, err
+	}
+	pattern := e.valueToString(patternVal)
+
+	replacementVal, err := e.evalExpressionValue(args[2])
+	if err != nil {
+		return nil, err
+	}
+	replacement := e.valueToString(replacementVal)
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex: %v", err)
+	}
+
+	return re.ReplaceAllString(text, replacement), nil
 }
 
 // builtinRange implements range(n) - returns [0, 1, 2, ..., n-1]
@@ -749,7 +1427,7 @@ func (e *Evaluator) evalArrayLiteral(node *ast.ArrayLiteral) (Value, error) {
 	return elements, nil
 }
 
-// evalIndexExpression handles array indexing: arr[0]
+// evalIndexExpression handles array/dict indexing: arr[0], dict["key"]
 func (e *Evaluator) evalIndexExpression(node *ast.IndexExpression) (Value, error) {
 	left, err := e.evalExpressionValue(node.Left)
 	if err != nil {
@@ -761,6 +1439,16 @@ func (e *Evaluator) evalIndexExpression(node *ast.IndexExpression) (Value, error
 		return nil, err
 	}
 
+	// Dictionary indexing
+	if dict, ok := left.(map[string]Value); ok {
+		key := e.valueToString(index)
+		if val, exists := dict[key]; exists {
+			return val, nil
+		}
+		return nil, fmt.Errorf("key not found: %s", key)
+	}
+
+	// Array indexing
 	arr, ok := left.([]Value)
 	if !ok {
 		return nil, fmt.Errorf("index operator not supported on %T", left)
@@ -776,4 +1464,26 @@ func (e *Evaluator) evalIndexExpression(node *ast.IndexExpression) (Value, error
 	}
 
 	return arr[idx], nil
+}
+
+// evalDictLiteral evaluates a dictionary literal
+func (e *Evaluator) evalDictLiteral(node *ast.DictLiteral) (Value, error) {
+	dict := make(map[string]Value)
+
+	for keyNode, valueNode := range node.Pairs {
+		key, err := e.evalExpressionValue(keyNode)
+		if err != nil {
+			return nil, err
+		}
+		keyStr := e.valueToString(key)
+
+		value, err := e.evalExpressionValue(valueNode)
+		if err != nil {
+			return nil, err
+		}
+
+		dict[keyStr] = value
+	}
+
+	return dict, nil
 }

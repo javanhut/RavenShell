@@ -53,7 +53,14 @@ mixed = ["text", 42, "more"]
 
 ### Booleans
 
-Boolean values result from comparison operations. They are not directly assignable but are used in conditions:
+Boolean literals `true` and `false` can be assigned directly:
+
+```rsh
+enabled = true
+disabled = false
+```
+
+Boolean values also result from comparison and logical operations:
 
 ```rsh
 if x > 5 {      # Comparison produces boolean
@@ -66,6 +73,22 @@ if x > 5 {      # Comparison produces boolean
 - Empty string `""` is false, non-empty strings are true
 - Empty arrays are false, non-empty arrays are true
 - `nil` is false
+- `false` is false, `true` is true
+
+### Dictionaries
+
+Key-value collections (also called maps or hashes):
+
+```rsh
+# Dictionary literal
+person = {"name": "Alice", "age": 30}
+
+# Access values by key
+print person["name"]    # Alice
+print person["age"]     # 30
+```
+
+Keys must be strings. Values can be any type.
 
 ## Variables
 
@@ -140,6 +163,47 @@ if count >= 10 {
 }
 ```
 
+### Logical Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `&&` | Logical AND | `x > 0 && x < 10` |
+| `\|\|` | Logical OR | `x < 0 \|\| x > 10` |
+| `!` | Logical NOT | `!condition` |
+
+```rsh
+if x > 0 && x < 100 {
+    print "x is between 0 and 100"
+}
+
+if status == "error" || status == "failed" {
+    print "something went wrong"
+}
+
+if !enabled {
+    print "feature is disabled"
+}
+
+# Boolean expressions
+print (true && false)   # false
+print (true || false)   # true
+print (!true)           # false
+```
+
+### Regex Match Operator
+
+The `=~` operator tests if a string matches a regular expression:
+
+```rsh
+if "test@example.com" =~ "[a-z]+@[a-z]+[.][a-z]+" {
+    print "valid email pattern"
+}
+
+if filename =~ ".*[.]txt$" {
+    print "text file"
+}
+```
+
 ### String Concatenation
 
 Use `+` to concatenate strings:
@@ -156,13 +220,16 @@ When either operand is a string, `+` performs concatenation.
 
 From highest to lowest precedence:
 
-1. `[]` - Array indexing
-2. `*`, `/`, `%` - Multiplication, division, modulo
-3. `+`, `-` - Addition, subtraction
-4. `<`, `>`, `<=`, `>=` - Comparison
-5. `==`, `!=` - Equality
-6. `|` - Pipe
-7. `>`, `>>`, `<` - Redirection
+1. `[]` - Array/dictionary indexing
+2. `!` - Logical NOT
+3. `*`, `/`, `%` - Multiplication, division, modulo
+4. `+`, `-` - Addition, subtraction
+5. `<`, `>`, `<=`, `>=` - Comparison
+6. `==`, `!=`, `=~` - Equality and regex match
+7. `&&` - Logical AND
+8. `||` - Logical OR
+9. `|` - Pipe
+10. `>`, `>>`, `<` - Redirection
 
 Use parentheses to override precedence:
 
@@ -248,6 +315,102 @@ for fruit in fruits {
 }
 ```
 
+### Break and Continue
+
+Use `break` to exit a loop early:
+
+```rsh
+for i in range(10) {
+    if i == 5 {
+        break
+    }
+    print i
+}
+# Output: 0 1 2 3 4
+```
+
+Use `continue` to skip to the next iteration:
+
+```rsh
+for i in range(6) {
+    if i == 3 {
+        continue
+    }
+    print i
+}
+# Output: 0 1 2 4 5
+```
+
+### Switch/Match Statements
+
+Match a value against multiple cases:
+
+```rsh
+switch value {
+    case 1: { print "one" }
+    case 2: { print "two" }
+    case 3: { print "three" }
+    default { print "other" }
+}
+```
+
+The `match` keyword is an alias for `switch`:
+
+```rsh
+match status {
+    case "ok": { print "success" }
+    case "error": { print "failure" }
+    default { print "unknown" }
+}
+```
+
+## User-Defined Functions
+
+Define custom functions using the `fn` keyword (or `func`):
+
+```rsh
+fn add(a, b) {
+    return a + b
+}
+
+result = add(3, 4)
+print result    # 7
+```
+
+### Function Syntax
+
+```rsh
+fn function_name(param1, param2, ...) {
+    # function body
+    return value    # optional
+}
+```
+
+### Examples
+
+```rsh
+# Function with no return value
+fn greet(name) {
+    print "Hello, " + name
+}
+greet("World")
+
+# Function with return value
+fn square(x) {
+    return x * x
+}
+print square(5)     # 25
+
+# Function with multiple parameters
+fn max(a, b) {
+    if a > b {
+        return a
+    }
+    return b
+}
+print max(10, 20)   # 20
+```
+
 ## Built-in Functions
 
 ### range(n)
@@ -296,6 +459,186 @@ items = append(items, "first")
 items = append(items, "second")
 print items
 # Output: [first, second]
+```
+
+### len(value)
+
+Returns the length of a string or array.
+
+**Syntax:** `len(value)`
+
+**Example:**
+
+```rsh
+print len("hello")      # 5
+print len([1, 2, 3])    # 3
+```
+
+## String Functions
+
+### upper(string)
+
+Converts a string to uppercase.
+
+**Syntax:** `upper(string)`
+
+**Example:**
+
+```rsh
+print upper("hello")    # HELLO
+```
+
+### lower(string)
+
+Converts a string to lowercase.
+
+**Syntax:** `lower(string)`
+
+**Example:**
+
+```rsh
+print lower("HELLO")    # hello
+```
+
+### trim(string)
+
+Removes leading and trailing whitespace.
+
+**Syntax:** `trim(string)`
+
+**Example:**
+
+```rsh
+print trim("  hello  ")     # hello
+```
+
+### contains(string, substring)
+
+Checks if a string contains a substring.
+
+**Syntax:** `contains(string, substring)`
+
+**Returns:** Boolean
+
+**Example:**
+
+```rsh
+print contains("hello world", "world")  # true
+print contains("hello", "xyz")          # false
+```
+
+### replace(string, old, new)
+
+Replaces all occurrences of a substring.
+
+**Syntax:** `replace(string, old, new)`
+
+**Example:**
+
+```rsh
+print replace("hello", "l", "L")    # heLLo
+```
+
+### split(string, delimiter)
+
+Splits a string into an array.
+
+**Syntax:** `split(string, delimiter)`
+
+**Returns:** Array of strings
+
+**Example:**
+
+```rsh
+parts = split("a,b,c", ",")
+print parts     # [a, b, c]
+```
+
+## Array Functions
+
+### first(array)
+
+Returns the first element of an array.
+
+**Syntax:** `first(array)`
+
+**Example:**
+
+```rsh
+arr = [1, 2, 3, 4, 5]
+print first(arr)    # 1
+```
+
+### last(array)
+
+Returns the last element of an array.
+
+**Syntax:** `last(array)`
+
+**Example:**
+
+```rsh
+arr = [1, 2, 3, 4, 5]
+print last(arr)     # 5
+```
+
+### join(array, delimiter)
+
+Joins array elements into a string.
+
+**Syntax:** `join(array, delimiter)`
+
+**Example:**
+
+```rsh
+print join(["a", "b", "c"], "-")    # a-b-c
+```
+
+### slice(array, start, end)
+
+Returns a portion of an array.
+
+**Syntax:** `slice(array, start, end)`
+
+**Arguments:**
+- `start`: Starting index (inclusive)
+- `end`: Ending index (exclusive)
+
+**Example:**
+
+```rsh
+arr = [1, 2, 3, 4, 5]
+print slice(arr, 1, 3)  # [2, 3]
+```
+
+## Regex Functions
+
+### regex_find(string, pattern)
+
+Finds all matches of a regex pattern.
+
+**Syntax:** `regex_find(string, pattern)`
+
+**Returns:** Array of matches
+
+**Example:**
+
+```rsh
+matches = regex_find("The year is 2024 and month is 12", "[0-9]+")
+print matches   # [2024, 12]
+```
+
+### regex_replace(string, pattern, replacement)
+
+Replaces all regex matches with a string.
+
+**Syntax:** `regex_replace(string, pattern, replacement)`
+
+**Example:**
+
+```rsh
+result = regex_replace("hello123world456", "[0-9]+", "#")
+print result    # hello#world#
 ```
 
 ## Arrays

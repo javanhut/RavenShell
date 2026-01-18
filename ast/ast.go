@@ -3,6 +3,7 @@ package ast
 import (
 	"bytes"
 	"ravenshell/token"
+	"strings"
 )
 
 // Node is the base interface for all AST nodes
@@ -87,6 +88,29 @@ type IntegerLiteral struct {
 func (il *IntegerLiteral) expressionNode()      {}
 func (il *IntegerLiteral) TokenLiteral() string { return il.Token.Literal }
 func (il *IntegerLiteral) String() string       { return il.Token.Literal }
+
+// BooleanLiteral represents true/false values
+type BooleanLiteral struct {
+	Token token.Token
+	Value bool
+}
+
+func (bl *BooleanLiteral) expressionNode()      {}
+func (bl *BooleanLiteral) TokenLiteral() string { return bl.Token.Literal }
+func (bl *BooleanLiteral) String() string       { return bl.Token.Literal }
+
+// PrefixExpression represents unary operators: !expr
+type PrefixExpression struct {
+	Token    token.Token // the prefix token, e.g. !
+	Operator string
+	Right    Expression
+}
+
+func (pe *PrefixExpression) expressionNode()      {}
+func (pe *PrefixExpression) TokenLiteral() string { return pe.Token.Literal }
+func (pe *PrefixExpression) String() string {
+	return "(" + pe.Operator + pe.Right.String() + ")"
+}
 
 // StringLiteral represents a quoted string
 type StringLiteral struct {
@@ -279,6 +303,118 @@ func (is *IfStatement) String() string {
 	return out.String()
 }
 
+// BreakStatement represents the break keyword
+type BreakStatement struct {
+	Token token.Token
+}
+
+func (bs *BreakStatement) statementNode()       {}
+func (bs *BreakStatement) TokenLiteral() string { return bs.Token.Literal }
+func (bs *BreakStatement) String() string       { return "break" }
+
+// ContinueStatement represents the continue keyword
+type ContinueStatement struct {
+	Token token.Token
+}
+
+func (cs *ContinueStatement) statementNode()       {}
+func (cs *ContinueStatement) TokenLiteral() string { return cs.Token.Literal }
+func (cs *ContinueStatement) String() string       { return "continue" }
+
+// FunctionStatement represents: fn name(params) { body }
+type FunctionStatement struct {
+	Token      token.Token     // the FUNCTION token
+	Name       *Identifier     // function name
+	Parameters []*Identifier   // parameter names
+	Body       *BlockStatement // function body
+}
+
+func (fs *FunctionStatement) statementNode()       {}
+func (fs *FunctionStatement) TokenLiteral() string { return fs.Token.Literal }
+func (fs *FunctionStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("fn ")
+	out.WriteString(fs.Name.String())
+	out.WriteString("(")
+	for i, p := range fs.Parameters {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(p.String())
+	}
+	out.WriteString(") ")
+	out.WriteString(fs.Body.String())
+	return out.String()
+}
+
+// ReturnStatement represents: return [value]
+type ReturnStatement struct {
+	Token token.Token // the RETURN token
+	Value Expression  // optional return value
+}
+
+func (rs *ReturnStatement) statementNode()       {}
+func (rs *ReturnStatement) TokenLiteral() string { return rs.Token.Literal }
+func (rs *ReturnStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("return")
+	if rs.Value != nil {
+		out.WriteString(" ")
+		out.WriteString(rs.Value.String())
+	}
+	return out.String()
+}
+
+// CaseClause represents a single case in a switch statement
+type CaseClause struct {
+	Token      token.Token     // the CASE token
+	Values     []Expression    // values to match (can be multiple: case 1, 2, 3:)
+	Body       *BlockStatement // case body
+}
+
+func (cc *CaseClause) statementNode()       {}
+func (cc *CaseClause) TokenLiteral() string { return cc.Token.Literal }
+func (cc *CaseClause) String() string {
+	var out bytes.Buffer
+	out.WriteString("case ")
+	for i, v := range cc.Values {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(v.String())
+	}
+	out.WriteString(": ")
+	out.WriteString(cc.Body.String())
+	return out.String()
+}
+
+// SwitchStatement represents: switch expr { case val: { ... } default { ... } }
+type SwitchStatement struct {
+	Token   token.Token     // the SWITCH token
+	Value   Expression      // expression to switch on
+	Cases   []*CaseClause   // case clauses
+	Default *BlockStatement // optional default clause
+}
+
+func (ss *SwitchStatement) statementNode()       {}
+func (ss *SwitchStatement) TokenLiteral() string { return ss.Token.Literal }
+func (ss *SwitchStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("switch ")
+	out.WriteString(ss.Value.String())
+	out.WriteString(" { ")
+	for _, c := range ss.Cases {
+		out.WriteString(c.String())
+		out.WriteString(" ")
+	}
+	if ss.Default != nil {
+		out.WriteString("default ")
+		out.WriteString(ss.Default.String())
+	}
+	out.WriteString("}")
+	return out.String()
+}
+
 // InfixExpression represents binary operations: left op right
 type InfixExpression struct {
 	Token    token.Token // the operator token
@@ -345,6 +481,26 @@ func (al *ArrayLiteral) String() string {
 		}
 		out.WriteString("]")
 	}
+	return out.String()
+}
+
+// DictLiteral represents dictionary literals: {"key": value}
+type DictLiteral struct {
+	Token token.Token         // the LBRACE token
+	Pairs map[Expression]Expression
+}
+
+func (dl *DictLiteral) expressionNode()      {}
+func (dl *DictLiteral) TokenLiteral() string { return dl.Token.Literal }
+func (dl *DictLiteral) String() string {
+	var out bytes.Buffer
+	out.WriteString("{")
+	pairs := []string{}
+	for key, value := range dl.Pairs {
+		pairs = append(pairs, key.String()+": "+value.String())
+	}
+	out.WriteString(strings.Join(pairs, ", "))
+	out.WriteString("}")
 	return out.String()
 }
 

@@ -37,12 +37,19 @@ const (
 	TILDE      TokenType = "TILDE"
 
 	// Control flow keywords
-	FOR    TokenType = "FOR"
-	IN     TokenType = "IN"
-	IF     TokenType = "IF"
-	ELSE   TokenType = "ELSE"
-	RANGE  TokenType = "RANGE"
-	APPEND TokenType = "APPEND"
+	FOR      TokenType = "FOR"
+	IN       TokenType = "IN"
+	IF       TokenType = "IF"
+	ELSE     TokenType = "ELSE"
+	RANGE    TokenType = "RANGE"
+	APPEND   TokenType = "APPEND"
+	BREAK    TokenType = "BREAK"
+	CONTINUE TokenType = "CONTINUE"
+	FUNCTION TokenType = "FUNCTION"
+	RETURN   TokenType = "RETURN"
+	SWITCH   TokenType = "SWITCH"
+	CASE     TokenType = "CASE"
+	DEFAULT  TokenType = "DEFAULT"
 
 	// Delimiters
 	LBRACE   TokenType = "LBRACE"   // {
@@ -52,6 +59,7 @@ const (
 	LBRACKET TokenType = "LBRACKET" // [
 	RBRACKET TokenType = "RBRACKET" // ]
 	COMMA    TokenType = "COMMA"    // ,
+	COLON    TokenType = "COLON"    // :
 
 	// Operators
 	ASSIGN   TokenType = "ASSIGN"   // =
@@ -65,6 +73,16 @@ const (
 	GT       TokenType = "GT"       // > (for comparisons, different from GREATER for redirection)
 	LTE      TokenType = "LTE"      // <=
 	GTE      TokenType = "GTE"      // >=
+
+	// Logical operators
+	AND   TokenType = "AND"   // &&
+	OR    TokenType = "OR"    // ||
+	NOT   TokenType = "NOT"   // !
+	TRUE  TokenType = "TRUE"  // true
+	FALSE TokenType = "FALSE" // false
+
+	// Regex
+	REGEX_MATCH TokenType = "REGEX_MATCH" // =~
 )
 
 var TokenMap = map[string]TokenType{
@@ -84,6 +102,17 @@ var TokenMap = map[string]TokenType{
 	"in":     IN,
 	"if":     IF,
 	"else":   ELSE,
-	"range":  RANGE,
-	"append": APPEND,
+	"range":    RANGE,
+	"append":   APPEND,
+	"break":    BREAK,
+	"continue": CONTINUE,
+	"fn":       FUNCTION,
+	"func":     FUNCTION,
+	"return":   RETURN,
+	"switch":   SWITCH,
+	"match":    SWITCH,
+	"case":     CASE,
+	"default":  DEFAULT,
+	"true":     TRUE,
+	"false":    FALSE,
 }

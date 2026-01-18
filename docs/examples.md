@@ -279,6 +279,31 @@ for i in range(20) {
 }
 ```
 
+**With logical operators:**
+
+```rsh
+# fizzbuzz_v2.rsh - using logical operators
+
+for i in range(20) {
+    divisible_by_3 = (i % 3 == 0)
+    divisible_by_5 = (i % 5 == 0)
+
+    if divisible_by_3 && divisible_by_5 {
+        print "FizzBuzz"
+    } else {
+        if divisible_by_3 {
+            print "Fizz"
+        } else {
+            if divisible_by_5 {
+                print "Buzz"
+            } else {
+                print i
+            }
+        }
+    }
+}
+```
+
 ### Sum of Numbers
 
 ```rsh
@@ -380,6 +405,275 @@ print medium
 
 print "Large (>= 20):"
 print large
+```
+
+## User-Defined Functions
+
+### Basic Function
+
+```rsh
+# Define a function to calculate factorial
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+print factorial(5)    # 120
+print factorial(10)   # 3628800
+```
+
+### Utility Functions
+
+```rsh
+# Helper functions for common tasks
+fn is_even(n) {
+    return n % 2 == 0
+}
+
+fn is_positive(n) {
+    return n > 0
+}
+
+fn clamp(value, min, max) {
+    if value < min {
+        return min
+    }
+    if value > max {
+        return max
+    }
+    return value
+}
+
+print is_even(4)          # true
+print is_positive(-5)     # false
+print clamp(15, 0, 10)    # 10
+```
+
+## Logical Operators
+
+### Boolean Expressions
+
+```rsh
+# Using logical AND, OR, NOT
+x = 5
+y = 10
+
+if x > 0 && y > 0 {
+    print "both positive"
+}
+
+if x < 0 || y < 0 {
+    print "at least one negative"
+}
+
+enabled = true
+if !enabled {
+    print "disabled"
+}
+```
+
+### Complex Conditions
+
+```rsh
+age = 25
+has_license = true
+has_car = false
+
+if age >= 18 && has_license && has_car {
+    print "can drive own car"
+} else {
+    if age >= 18 && has_license {
+        print "can drive, but needs a car"
+    } else {
+        print "cannot drive"
+    }
+}
+```
+
+## Break and Continue
+
+### Early Exit with Break
+
+```rsh
+# Find first number divisible by 7
+for i in range(100) {
+    if i > 0 && i % 7 == 0 {
+        print "First number divisible by 7: " + i
+        break
+    }
+}
+```
+
+### Skip Iterations with Continue
+
+```rsh
+# Print only odd numbers
+for i in range(10) {
+    if i % 2 == 0 {
+        continue
+    }
+    print i
+}
+# Output: 1 3 5 7 9
+```
+
+## Switch/Match Statements
+
+### Basic Switch
+
+```rsh
+day = 3
+switch day {
+    case 1: { print "Monday" }
+    case 2: { print "Tuesday" }
+    case 3: { print "Wednesday" }
+    case 4: { print "Thursday" }
+    case 5: { print "Friday" }
+    default { print "Weekend" }
+}
+```
+
+### HTTP Status Codes
+
+```rsh
+fn status_message(code) {
+    switch code {
+        case 200: { return "OK" }
+        case 404: { return "Not Found" }
+        case 500: { return "Internal Server Error" }
+        default { return "Unknown Status" }
+    }
+}
+
+print status_message(200)   # OK
+print status_message(404)   # Not Found
+print status_message(418)   # Unknown Status
+```
+
+## String Manipulation
+
+### String Functions
+
+```rsh
+text = "  Hello, World!  "
+
+# Transform case
+print upper("hello")        # HELLO
+print lower("HELLO")        # hello
+
+# Trim whitespace
+print trim(text)            # Hello, World!
+
+# Check contents
+print contains("hello world", "world")  # true
+
+# Replace text
+print replace("banana", "a", "o")       # bonono
+
+# Split into array
+csv = "apple,banana,cherry"
+fruits = split(csv, ",")
+print fruits                # [apple, banana, cherry]
+
+# Get length
+print len("hello")          # 5
+```
+
+### Building Strings
+
+```rsh
+words = ["Hello", "World", "from", "RavenShell"]
+sentence = join(words, " ")
+print sentence      # Hello World from RavenShell
+```
+
+## Array Functions
+
+### Array Manipulation
+
+```rsh
+numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+# Get first and last elements
+print first(numbers)        # 1
+print last(numbers)         # 10
+
+# Get a slice
+middle = slice(numbers, 3, 7)
+print middle                # [4, 5, 6, 7]
+
+# Join into string
+digits = ["1", "2", "3"]
+print join(digits, "-")     # 1-2-3
+```
+
+## Dictionaries
+
+### Basic Dictionary Usage
+
+```rsh
+# Create a dictionary
+person = {"name": "Alice", "age": 30, "city": "Boston"}
+
+# Access values
+print person["name"]    # Alice
+print person["age"]     # 30
+```
+
+### Configuration Dictionary
+
+```rsh
+config = {
+    "debug": "true",
+    "max_retries": "3",
+    "timeout": "30"
+}
+
+print "Debug mode: " + config["debug"]
+print "Timeout: " + config["timeout"] + " seconds"
+```
+
+## Regular Expressions
+
+### Pattern Matching
+
+```rsh
+# Validate email pattern
+email = "user@example.com"
+if email =~ "[a-z]+@[a-z]+[.][a-z]+" {
+    print "Valid email format"
+}
+
+# Check file extension
+filename = "document.pdf"
+if filename =~ ".*[.]pdf$" {
+    print "PDF file detected"
+}
+```
+
+### Finding and Replacing
+
+```rsh
+# Find all numbers in text
+text = "Order #123 shipped on 2024-01-15, tracking: 456789"
+numbers = regex_find(text, "[0-9]+")
+print numbers   # [123, 2024, 01, 15, 456789]
+
+# Redact sensitive data
+message = "Call me at 555-1234 or 555-5678"
+redacted = regex_replace(message, "[0-9]{3}-[0-9]{4}", "XXX-XXXX")
+print redacted  # Call me at XXX-XXXX or XXX-XXXX
+```
+
+### Log Parsing
+
+```rsh
+# Extract timestamps from log entries
+log = "2024-01-15 10:30:45 INFO User logged in"
+timestamps = regex_find(log, "[0-9]{2}:[0-9]{2}:[0-9]{2}")
+print timestamps    # [10:30:45]
 ```
 
 ## Configuration Examples

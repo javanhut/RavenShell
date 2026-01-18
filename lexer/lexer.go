@@ -61,7 +61,21 @@ func (l *Lexer) NextToken() token.Token {
 
 	switch ch {
 	case '|':
+		if l.peekNext() == '|' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.OR, Literal: l.input[start:l.pos]}
+		}
 		return token.Token{Type: token.PIPE, Literal: string(l.advance())}
+	case '&':
+		if l.peekNext() == '&' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.AND, Literal: l.input[start:l.pos]}
+		}
+		return token.Token{Type: token.ILLEGAL, Literal: string(l.advance())}
 	case '.':
 		return token.Token{Type: token.FULLSTOP, Literal: string(l.advance())}
 	case '~':
@@ -84,6 +98,8 @@ func (l *Lexer) NextToken() token.Token {
 		return token.Token{Type: token.RBRACKET, Literal: string(l.advance())}
 	case ',':
 		return token.Token{Type: token.COMMA, Literal: string(l.advance())}
+	case ':':
+		return token.Token{Type: token.COLON, Literal: string(l.advance())}
 	case '+':
 		return token.Token{Type: token.PLUS, Literal: string(l.advance())}
 	case '-':
@@ -98,6 +114,11 @@ func (l *Lexer) NextToken() token.Token {
 			l.advance()
 			l.advance()
 			return token.Token{Type: token.EQ, Literal: l.input[start:l.pos]}
+		} else if l.peekNext() == '~' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.REGEX_MATCH, Literal: l.input[start:l.pos]}
 		}
 		return token.Token{Type: token.ASSIGN, Literal: string(l.advance())}
 	case '!':
@@ -107,7 +128,7 @@ func (l *Lexer) NextToken() token.Token {
 			l.advance()
 			return token.Token{Type: token.NOT_EQ, Literal: l.input[start:l.pos]}
 		}
-		return token.Token{Type: token.ILLEGAL, Literal: string(l.advance())}
+		return token.Token{Type: token.NOT, Literal: string(l.advance())}
 	case '>':
 		if l.peekNext() == '>' {
 			start := l.pos

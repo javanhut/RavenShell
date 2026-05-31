@@ -5,6 +5,10 @@ type TokenType string
 type Token struct {
 	Type    TokenType
 	Literal string
+	// PrecededByNewline is true when one or more newlines were skipped
+	// immediately before this token. The parser uses it to terminate a
+	// command's argument list at the end of a line.
+	PrecededByNewline bool
 }
 
 const (
@@ -23,11 +27,14 @@ const (
 	IDENT      TokenType = "IDENTIFER"
 	INTEGER    TokenType = "INTEGER"
 	STRING     TokenType = "STRING"
+	FLAG       TokenType = "FLAG" // command flag like -l, --all, --max=5
 	PIPE       TokenType = "PIPE"
 	DOLLAR     TokenType = "DOLLAR"
 	PRINT      TokenType = "PRINT"
 	SHOW       TokenType = "SHOW"
 	CLEAR      TokenType = "CLEAR"
+	EXPORT     TokenType = "EXPORT"
+	ENV        TokenType = "ENV"
 	GREATER    TokenType = "GREATER"
 	INTO       TokenType = "INTO"
 	LESS       TokenType = "LESS"
@@ -37,12 +44,17 @@ const (
 	TILDE      TokenType = "TILDE"
 
 	// Control flow keywords
-	FOR    TokenType = "FOR"
-	IN     TokenType = "IN"
-	IF     TokenType = "IF"
-	ELSE   TokenType = "ELSE"
-	RANGE  TokenType = "RANGE"
-	APPEND TokenType = "APPEND"
+	FOR      TokenType = "FOR"
+	IN       TokenType = "IN"
+	IF       TokenType = "IF"
+	ELSE     TokenType = "ELSE"
+	RANGE    TokenType = "RANGE"
+	APPEND   TokenType = "APPEND"
+	WHILE    TokenType = "WHILE"
+	BREAK    TokenType = "BREAK"
+	CONTINUE TokenType = "CONTINUE"
+	FN       TokenType = "FN"
+	RETURN   TokenType = "RETURN"
 
 	// Delimiters
 	LBRACE   TokenType = "LBRACE"   // {
@@ -68,22 +80,29 @@ const (
 )
 
 var TokenMap = map[string]TokenType{
-	"ls":     LIST,
-	"rm":     REMOVE,
-	"mkdir":  MAKEDIR,
-	"rmdir":  REMOVEDIR,
-	"cd":     CHANGEDIR,
-	"cwd":    CURRENTDIR,
-	"whoami": WHOAMI,
-	"mkfile": MAKEFILE,
-	"output": OUTPUT,
-	"print":  PRINT,
-	"show":   SHOW,
-	"clear":  CLEAR,
-	"for":    FOR,
-	"in":     IN,
-	"if":     IF,
-	"else":   ELSE,
-	"range":  RANGE,
-	"append": APPEND,
+	"ls":       LIST,
+	"rm":       REMOVE,
+	"mkdir":    MAKEDIR,
+	"rmdir":    REMOVEDIR,
+	"cd":       CHANGEDIR,
+	"cwd":      CURRENTDIR,
+	"whoami":   WHOAMI,
+	"mkfile":   MAKEFILE,
+	"output":   OUTPUT,
+	"print":    PRINT,
+	"show":     SHOW,
+	"clear":    CLEAR,
+	"export":   EXPORT,
+	"env":      ENV,
+	"for":      FOR,
+	"in":       IN,
+	"if":       IF,
+	"else":     ELSE,
+	"range":    RANGE,
+	"append":   APPEND,
+	"while":    WHILE,
+	"break":    BREAK,
+	"continue": CONTINUE,
+	"fn":       FN,
+	"return":   RETURN,
 }

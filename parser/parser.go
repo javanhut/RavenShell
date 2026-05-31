@@ -56,6 +56,15 @@ type Parser struct {
 
 	prefixParseFns map[token.TokenType]prefixParseFn
 	infixParseFns  map[token.TokenType]infixParseFn
+
+	// cmdPos is true when the next expression begins in "command position"
+	// (the start of an expression statement), where a bare identifier or path
+	// is interpreted as an external command rather than a value.
+	cmdPos bool
+	// prefixCmdPos carries cmdPos to the prefix parse function for the current
+	// expression. Prefix functions that can produce a command capture and clear
+	// it at entry so nested expressions are not treated as commands.
+	prefixCmdPos bool
 }
 
 // New creates a new Parser
@@ -70,6 +79,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.IDENT, p.parseIdentifierOrCommand)
 	p.registerPrefix(token.INTEGER, p.parseIntegerLiteral)
 	p.registerPrefix(token.STRING, p.parseStringLiteral)
+	p.registerPrefix(token.FLAG, p.parseFlagLiteral)
 	p.registerPrefix(token.DOLLAR, p.parseVariableReference)
 	p.registerPrefix(token.FULLSTOP, p.parsePath)
 	p.registerPrefix(token.FSLASH, p.parsePath)
@@ -92,6 +102,8 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.PRINT, p.parseCommandKeyword)
 	p.registerPrefix(token.SHOW, p.parseCommandKeyword)
 	p.registerPrefix(token.CLEAR, p.parseCommandKeyword)
+	p.registerPrefix(token.EXPORT, p.parseCommandKeyword)
+	p.registerPrefix(token.ENV, p.parseCommandKeyword)
 
 	// Register infix parse functions
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
@@ -188,8 +200,18 @@ func (p *Parser) parseStatement() ast.Statement {
 	switch p.curToken.Type {
 	case token.FOR:
 		return p.parseForStatement()
+	case token.WHILE:
+		return p.parseWhileStatement()
 	case token.IF:
 		return p.parseIfStatement()
+	case token.BREAK:
+		return &ast.BreakStatement{Token: p.curToken}
+	case token.CONTINUE:
+		return &ast.ContinueStatement{Token: p.curToken}
+	case token.FN:
+		return p.parseFunctionStatement()
+	case token.RETURN:
+		return p.parseReturnStatement()
 	case token.IDENT:
 		// Check if this is an assignment (IDENT = value)
 		if p.peekTokenIs(token.ASSIGN) {
@@ -203,18 +225,27 @@ func (p *Parser) parseStatement() ast.Statement {
 
 func (p *Parser) parseExpressionStatement() *ast.ExpressionStatement {
 	stmt := &ast.ExpressionStatement{Token: p.curToken}
+	// The first token of a statement is in command position: a bare identifier
+	// or path here is run as an external command.
+	p.cmdPos = true
 	stmt.Expression = p.parseExpression(LOWEST)
 	return stmt
 }
 
 // parseExpression is the core Pratt parser function
 func (p *Parser) parseExpression(precedence int) ast.Expression {
+	// Hand command-position status to the prefix function for this expression,
+	// then clear it so nested sub-expressions are parsed as values.
+	p.prefixCmdPos = p.cmdPos
+	p.cmdPos = false
+
 	prefix := p.prefixParseFns[p.curToken.Type]
 	if prefix == nil {
 		p.noPrefixParseFnError(p.curToken.Type)
 		return nil
 	}
 	leftExp := prefix()
+	p.prefixCmdPos = false
 
 	// Continue parsing infix expressions while precedence allows
 	for !p.peekTokenIs(token.EOF) && precedence < p.peekPrecedence() {
@@ -231,18 +262,77 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 
 // parseIdentifierOrCommand handles IDENT tokens
 func (p *Parser) parseIdentifierOrCommand() ast.Expression {
+	cmdPos := p.prefixCmdPos
+	p.prefixCmdPos = false
+
 	// Check if this identifier is a known command
 	if cmdType, ok := token.TokenMap[p.curToken.Literal]; ok {
 		return p.parseCommand(cmdType)
 	}
 
-	// Check if this identifier is followed by path tokens (e.g., file.txt, foo/bar)
-	if p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP) {
-		return p.parsePathFromIdent()
+	// An identifier immediately followed by '(' is a function call, e.g. foo(x).
+	if p.peekTokenIs(token.LPAREN) {
+		return p.parseCallExpression()
 	}
 
-	// Otherwise, it's a regular identifier
+	// Check if this identifier is followed by path tokens (e.g., file.txt, foo/bar)
+	if p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP) {
+		path := p.parsePathFromIdent()
+		if cmdPos {
+			// e.g. ./script.sh or bin/tool at the start of a statement
+			return p.finishExternalCommand(path.String())
+		}
+		return path
+	}
+
+	// A bare identifier at the start of a statement is an external command.
+	if cmdPos {
+		return p.finishExternalCommand(p.curToken.Literal)
+	}
+
+	// Otherwise, it's a regular identifier (a value/variable reference)
 	return &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+}
+
+// parseFlagLiteral handles FLAG tokens (-l, --all, ...) as string arguments.
+func (p *Parser) parseFlagLiteral() ast.Expression {
+	p.prefixCmdPos = false
+	return &ast.StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+}
+
+// finishExternalCommand builds a CMD_EXTERNAL command node with the given name
+// and collects its arguments. curToken must be the command's name token.
+func (p *Parser) finishExternalCommand(name string) ast.Expression {
+	cmd := &ast.Command{
+		Token: p.curToken,
+		Name:  name,
+		Type:  ast.CMD_EXTERNAL,
+	}
+	cmd.Arguments = p.parseExternalArguments()
+	return cmd
+}
+
+// parseExternalArguments collects arguments for an external command. Unlike
+// built-in commands, external commands also accept FLAG tokens.
+func (p *Parser) parseExternalArguments() []ast.Expression {
+	args := []ast.Expression{}
+
+	for p.isArgumentToken(p.peekToken.Type) || p.peekTokenIs(token.FLAG) {
+		// A newline ends the command's argument list.
+		if p.peekToken.PrecededByNewline {
+			break
+		}
+		// Stop if we see IDENT followed by ASSIGN - that's a new statement.
+		if p.peekTokenIs(token.IDENT) && p.isNextAssignment() {
+			break
+		}
+
+		p.nextToken()
+		// Use PIPE precedence so pipes and redirects are left for the caller.
+		args = append(args, p.parseExpression(PIPE))
+	}
+
+	return args
 }
 
 // parseCommandKeyword handles command keyword tokens (LIST, REMOVE, etc.)
@@ -268,6 +358,10 @@ func (p *Parser) parseCommandArguments() []ast.Expression {
 
 	// Continue while next token can start an argument expression
 	for p.isArgumentToken(p.peekToken.Type) {
+		// A newline ends the command's argument list.
+		if p.peekToken.PrecededByNewline {
+			break
+		}
 		// Stop if we see IDENT followed by ASSIGN - that's a new assignment statement
 		if p.peekTokenIs(token.IDENT) && p.isNextAssignment() {
 			break
@@ -342,6 +436,9 @@ func (p *Parser) parseStringLiteral() ast.Expression {
 
 // parsePath parses a file path (./foo, ../bar, /absolute/path, etc.)
 func (p *Parser) parsePath() ast.Expression {
+	cmdPos := p.prefixCmdPos
+	p.prefixCmdPos = false
+
 	path := &ast.PathExpression{Token: p.curToken}
 	var pathStr string
 
@@ -364,6 +461,11 @@ func (p *Parser) parsePath() ast.Expression {
 	}
 
 	path.Value = pathStr
+	// A path at the start of a statement (./a.out, /usr/bin/tool) runs as an
+	// external command.
+	if cmdPos {
+		return p.finishExternalCommand(pathStr)
+	}
 	return path
 }
 
@@ -393,9 +495,17 @@ func (p *Parser) parsePathFromIdent() ast.Expression {
 
 // parseTilde handles ~ - either as a path prefix (~/foo) or as a home command
 func (p *Parser) parseTilde() ast.Expression {
+	cmdPos := p.prefixCmdPos
+	p.prefixCmdPos = false
+
 	// If followed by FSLASH, it's a path like ~/foo
 	if p.peekTokenIs(token.FSLASH) {
-		return p.parsePath()
+		path := p.parsePath()
+		if cmdPos {
+			// e.g. ~/bin/tool at the start of a statement
+			return p.finishExternalCommand(path.String())
+		}
+		return path
 	}
 
 	// Standalone ~ is a command to print/go to home directory
@@ -409,7 +519,22 @@ func (p *Parser) parseTilde() ast.Expression {
 }
 
 func (p *Parser) parseVariableReference() ast.Expression {
-	vr := &ast.VariableReference{Token: p.curToken}
+	dollar := p.curToken
+	p.prefixCmdPos = false
+
+	// $(command) is command substitution - capture the command's output.
+	if p.peekTokenIs(token.LPAREN) {
+		p.nextToken() // curToken = '('
+		p.nextToken() // curToken = first token of the inner command
+		p.cmdPos = true
+		cmd := p.parseExpression(LOWEST)
+		if !p.expectPeek(token.RPAREN) {
+			return nil
+		}
+		return &ast.CommandSubstitution{Token: dollar, Command: cmd}
+	}
+
+	vr := &ast.VariableReference{Token: dollar}
 
 	if !p.peekTokenIs(token.IDENT) {
 		p.errors = append(p.errors, "expected identifier after $")
@@ -430,6 +555,9 @@ func (p *Parser) parsePipeExpression(left ast.Expression) ast.Expression {
 
 	precedence := p.curPrecedence()
 	p.nextToken()
+	// The right side of a pipe is in command position so bare words there are
+	// run as commands (e.g. the `cat` in `echo hi | cat`).
+	p.cmdPos = true
 	expression.Right = p.parseExpression(precedence)
 
 	return expression
@@ -514,6 +642,10 @@ func tokenTypeToCommandType(tt token.TokenType) ast.CommandType {
 		return ast.CMD_SHOW
 	case token.CLEAR:
 		return ast.CMD_CLEAR
+	case token.EXPORT:
+		return ast.CMD_EXPORT
+	case token.ENV:
+		return ast.CMD_ENV
 	default:
 		return ast.CMD_EXTERNAL
 	}
@@ -559,7 +691,85 @@ func (p *Parser) parseForStatement() *ast.ForStatement {
 	return stmt
 }
 
-// parseIfStatement parses: if expression { block } [else { block }]
+// parseFunctionStatement parses: fn name(p1, p2) { block }
+func (p *Parser) parseFunctionStatement() *ast.FunctionStatement {
+	stmt := &ast.FunctionStatement{Token: p.curToken}
+
+	if !p.expectPeek(token.IDENT) {
+		return nil
+	}
+	stmt.Name = &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	if !p.expectPeek(token.LPAREN) {
+		return nil
+	}
+	stmt.Parameters = p.parseFunctionParameters()
+
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+	stmt.Body = p.parseBlockStatement()
+
+	return stmt
+}
+
+// parseFunctionParameters parses a comma-separated list of identifier
+// parameters terminated by ')'. curToken must be '(' on entry.
+func (p *Parser) parseFunctionParameters() []*ast.Identifier {
+	params := []*ast.Identifier{}
+
+	if p.peekTokenIs(token.RPAREN) {
+		p.nextToken()
+		return params
+	}
+
+	p.nextToken()
+	params = append(params, &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal})
+
+	for p.peekTokenIs(token.COMMA) {
+		p.nextToken()
+		p.nextToken()
+		params = append(params, &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal})
+	}
+
+	if !p.expectPeek(token.RPAREN) {
+		return nil
+	}
+
+	return params
+}
+
+// parseReturnStatement parses: return [expression]
+func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
+	stmt := &ast.ReturnStatement{Token: p.curToken}
+
+	// A bare `return` (end of line, end of block, or EOF) has no value.
+	if p.peekTokenIs(token.EOF) || p.peekTokenIs(token.RBRACE) || p.peekToken.PrecededByNewline {
+		return stmt
+	}
+
+	p.nextToken()
+	stmt.Value = p.parseExpression(LOWEST)
+	return stmt
+}
+
+// parseWhileStatement parses: while expression { block }
+func (p *Parser) parseWhileStatement() *ast.WhileStatement {
+	stmt := &ast.WhileStatement{Token: p.curToken}
+
+	p.nextToken()
+	stmt.Condition = p.parseExpression(LOWEST)
+
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+
+	stmt.Body = p.parseBlockStatement()
+
+	return stmt
+}
+
+// parseIfStatement parses: if expr { block } [else if expr { block }]... [else { block }]
 func (p *Parser) parseIfStatement() *ast.IfStatement {
 	stmt := &ast.IfStatement{Token: p.curToken}
 
@@ -574,6 +784,18 @@ func (p *Parser) parseIfStatement() *ast.IfStatement {
 
 	if p.peekTokenIs(token.ELSE) {
 		p.nextToken()
+
+		// "else if" chains: parse the nested if and wrap it in a block so the
+		// IfStatement.Alternative shape stays uniform.
+		if p.peekTokenIs(token.IF) {
+			p.nextToken()
+			nested := p.parseIfStatement()
+			stmt.Alternative = &ast.BlockStatement{
+				Token:      nested.Token,
+				Statements: []ast.Statement{nested},
+			}
+			return stmt
+		}
 
 		if !p.expectPeek(token.LBRACE) {
 			return nil

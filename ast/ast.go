@@ -108,6 +108,18 @@ func (vr *VariableReference) expressionNode()      {}
 func (vr *VariableReference) TokenLiteral() string { return vr.Token.Literal }
 func (vr *VariableReference) String() string       { return "$" + vr.Name.String() }
 
+// CommandSubstitution represents $(command) - captures a command's output.
+type CommandSubstitution struct {
+	Token   token.Token // the DOLLAR token
+	Command Expression
+}
+
+func (cs *CommandSubstitution) expressionNode()      {}
+func (cs *CommandSubstitution) TokenLiteral() string { return cs.Token.Literal }
+func (cs *CommandSubstitution) String() string {
+	return "$(" + cs.Command.String() + ")"
+}
+
 // CommandType represents the type of built-in command
 type CommandType string
 
@@ -124,6 +136,8 @@ const (
 	CMD_PRINT      CommandType = "print"
 	CMD_SHOW       CommandType = "show"
 	CMD_CLEAR      CommandType = "clear"
+	CMD_EXPORT     CommandType = "export"
+	CMD_ENV        CommandType = "env"
 	CMD_TILDE      CommandType = "~"
 	CMD_EXTERNAL   CommandType = "external"
 )
@@ -275,6 +289,86 @@ func (is *IfStatement) String() string {
 	if is.Alternative != nil {
 		out.WriteString(" else ")
 		out.WriteString(is.Alternative.String())
+	}
+	return out.String()
+}
+
+// WhileStatement represents: while condition { ... }
+type WhileStatement struct {
+	Token     token.Token // the WHILE token
+	Condition Expression
+	Body      *BlockStatement
+}
+
+func (ws *WhileStatement) statementNode()       {}
+func (ws *WhileStatement) TokenLiteral() string { return ws.Token.Literal }
+func (ws *WhileStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("while ")
+	out.WriteString(ws.Condition.String())
+	out.WriteString(" ")
+	out.WriteString(ws.Body.String())
+	return out.String()
+}
+
+// BreakStatement represents the break keyword
+type BreakStatement struct {
+	Token token.Token
+}
+
+func (bs *BreakStatement) statementNode()       {}
+func (bs *BreakStatement) TokenLiteral() string { return bs.Token.Literal }
+func (bs *BreakStatement) String() string       { return "break" }
+
+// ContinueStatement represents the continue keyword
+type ContinueStatement struct {
+	Token token.Token
+}
+
+func (cs *ContinueStatement) statementNode()       {}
+func (cs *ContinueStatement) TokenLiteral() string { return cs.Token.Literal }
+func (cs *ContinueStatement) String() string       { return "continue" }
+
+// FunctionStatement represents: fn name(p1, p2) { body }
+type FunctionStatement struct {
+	Token      token.Token // the FN token
+	Name       *Identifier
+	Parameters []*Identifier
+	Body       *BlockStatement
+}
+
+func (fs *FunctionStatement) statementNode()       {}
+func (fs *FunctionStatement) TokenLiteral() string { return fs.Token.Literal }
+func (fs *FunctionStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("fn ")
+	out.WriteString(fs.Name.String())
+	out.WriteString("(")
+	for i, p := range fs.Parameters {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(p.String())
+	}
+	out.WriteString(") ")
+	out.WriteString(fs.Body.String())
+	return out.String()
+}
+
+// ReturnStatement represents: return [value]
+type ReturnStatement struct {
+	Token token.Token // the RETURN token
+	Value Expression  // may be nil for a bare return
+}
+
+func (rs *ReturnStatement) statementNode()       {}
+func (rs *ReturnStatement) TokenLiteral() string { return rs.Token.Literal }
+func (rs *ReturnStatement) String() string {
+	var out bytes.Buffer
+	out.WriteString("return")
+	if rs.Value != nil {
+		out.WriteString(" ")
+		out.WriteString(rs.Value.String())
 	}
 	return out.String()
 }

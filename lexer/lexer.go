@@ -45,19 +45,37 @@ func (l *Lexer) peekNext() byte {
 }
 
 func (l *Lexer) NextToken() token.Token {
-	ch := l.peek()
-	if unicode.IsSpace(rune(ch)) {
-		l.advance()
-		return l.NextToken()
-	}
+	sawNewline := l.skipWhitespaceAndComments()
+	tok := l.scanToken()
+	tok.PrecededByNewline = sawNewline
+	return tok
+}
 
-	// Skip comments (from # to end of line)
-	if ch == '#' {
-		for l.peek() != '\n' && l.peek() != 0 {
+// skipWhitespaceAndComments advances past spaces, comments, and newlines,
+// reporting whether any newline was skipped (so the parser can detect line
+// boundaries between commands).
+func (l *Lexer) skipWhitespaceAndComments() bool {
+	sawNewline := false
+	for {
+		ch := l.peek()
+		if ch == '\n' {
+			sawNewline = true
 			l.advance()
+		} else if unicode.IsSpace(rune(ch)) {
+			l.advance()
+		} else if ch == '#' {
+			// Skip a comment up to (but not including) the end of line.
+			for l.peek() != '\n' && l.peek() != 0 {
+				l.advance()
+			}
+		} else {
+			return sawNewline
 		}
-		return l.NextToken()
 	}
+}
+
+func (l *Lexer) scanToken() token.Token {
+	ch := l.peek()
 
 	switch ch {
 	case '|':
@@ -87,6 +105,18 @@ func (l *Lexer) NextToken() token.Token {
 	case '+':
 		return token.Token{Type: token.PLUS, Literal: string(l.advance())}
 	case '-':
+		// A '-' immediately followed by a letter or another '-' is a command
+		// flag (e.g. -l, --all, --max-count=5), not subtraction. Arithmetic
+		// always uses spaces around the operator, so this stays unambiguous.
+		next := l.peekNext()
+		if unicode.IsLetter(rune(next)) || next == '-' {
+			start := l.pos
+			l.advance() // consume the leading '-'
+			for !isFlagTerminator(l.peek()) {
+				l.advance()
+			}
+			return token.Token{Type: token.FLAG, Literal: l.input[start:l.pos]}
+		}
 		return token.Token{Type: token.MINUS, Literal: string(l.advance())}
 	case '*':
 		return token.Token{Type: token.ASTERISK, Literal: string(l.advance())}
@@ -208,4 +238,16 @@ func (l *Lexer) NextToken() token.Token {
 
 func isAlphanumeric(ch byte) bool {
 	return unicode.IsLetter(rune(ch)) || unicode.IsDigit(rune(ch)) || ch == '_'
+}
+
+// isFlagTerminator reports whether ch ends a command flag token. Flags run
+// until whitespace, EOF, or a shell operator/delimiter so values like
+// --color=auto or --file=./path stay attached to the flag.
+func isFlagTerminator(ch byte) bool {
+	switch ch {
+	case 0, ' ', '\t', '\n', '\r', '|', '<', '>', '{', '}', '(', ')', ',', '"', '\'':
+		return true
+	default:
+		return false
+	}
 }

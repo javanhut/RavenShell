@@ -4,10 +4,18 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 
 ## Features
 
-- **Interactive REPL** - Full-featured command line with tab completion, history, and line editing
+- **Interactive REPL** - Full-featured command line with tab completion, line editing, and a colored prompt
+- **Fish-style Autosuggestions** - As you type, the most recent matching command appears dimmed inline; accept it with → / Ctrl-E / End
+- **Persistent History** - Command history is saved to `~/.raven_history` and restored across sessions
+- **ANSI Colors** - Colorized prompt, `ls` output (directories/executables/symlinks), and error messages (only when attached to a terminal)
 - **Script Execution** - Run `.rsh` script files for automation
 - **Go-like Syntax** - Variables, arrays, loops, and conditionals with familiar syntax
+- **Functions** - Define reusable functions with parameters, return values, and recursion (`fn name(args) { ... }`)
+- **Rich Control Flow** - `for`, `while`, `if`/`else if`/`else`, plus `break` and `continue`
+- **Built-in Helpers** - String/collection functions: `len`, `split`, `join`, `contains`, `upper`, `lower`, `trim`, `replace`
+- **Environment & Substitution** - `export`/`env` for environment variables and `$(command)` substitution
 - **Built-in Commands** - File system operations (ls, cd, mkdir, rm, etc.)
+- **External Commands** - Run any program on your `PATH` (git, python, cat, ...) with flag support (`-l`, `--all`)
 - **Pipes & Redirection** - Chain commands with `|` and redirect with `>`, `>>`, `<`
 - **Configuration** - Customize startup behavior with `.ravenrc`
 
@@ -51,18 +59,59 @@ for n in numbers {
     print n
 }
 
-# Conditionals
+# Conditionals (with else-if chains)
 count = 10
-if count > 5 {
+if count > 50 {
+    print "big"
+} else if count > 5 {
     print "count is greater than 5"
 } else {
     print "count is 5 or less"
 }
 
+# While loops with break / continue
+i = 0
+while i < 10 {
+    i = i + 1
+    if i % 2 == 0 {
+        continue
+    }
+    print i
+}
+
+# Functions (parameters, return values, recursion)
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+print factorial(5)
+
+# String / collection built-ins
+parts = split("a,b,c", ",")
+print join(parts, "-")
+print upper("ravenshell")
+print contains(parts, "b")
+
+# Environment variables and command substitution
+export PROJECT RavenShell
+print $PROJECT
+here = $(cwd)
+print here
+
 # Pipes and redirection
 ls | print
 ls > files.txt
+
+# External programs on your PATH (anything that isn't a built-in)
+git status
+python --version
+print "hello" | wc -w
 ```
+
+> Note: language-level text output uses the built-in `print`. Bare words that
+> aren't built-ins (e.g. `git`, `python`) are executed as external programs.
 
 ## Documentation
 

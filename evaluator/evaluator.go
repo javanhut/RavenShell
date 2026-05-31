@@ -5,34 +5,116 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"ravenshell/ansi"
 	"ravenshell/ast"
+	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+
+	"golang.org/x/term"
 )
 
 // Value represents any value in the shell
 type Value interface{}
 
+// controlKind identifies a non-local control-flow transfer.
+type controlKind int
+
+const (
+	ctrlBreak controlKind = iota
+	ctrlContinue
+	ctrlReturn
+)
+
+// controlSignal is propagated as an error to unwind loops and functions for
+// break, continue, and return. It is intercepted by the relevant evaluator and
+// never surfaces to the user as a real error.
+type controlSignal struct {
+	kind  controlKind
+	value Value
+}
+
+func (c *controlSignal) Error() string {
+	switch c.kind {
+	case ctrlBreak:
+		return "break outside of loop"
+	case ctrlContinue:
+		return "continue outside of loop"
+	default:
+		return "return outside of function"
+	}
+}
+
+func asControl(err error) (*controlSignal, bool) {
+	sig, ok := err.(*controlSignal)
+	return sig, ok
+}
+
 // Evaluator executes AST nodes
 type Evaluator struct {
-	cwd    string            // Current working directory
-	env    map[string]string // Environment variables (for $VAR)
-	vars   map[string]Value  // Script variables
-	stdout io.Writer         // Standard output (for redirections)
-	stdin  io.Reader         // Standard input (for redirections)
+	cwd    string                            // Current working directory
+	env    map[string]string                 // Environment variables (for $VAR)
+	vars   map[string]Value                  // Global script variables (== scopes[0])
+	scopes []map[string]Value                // Variable scope chain; innermost is last
+	funcs  map[string]*ast.FunctionStatement // User-defined functions
+	stdout io.Writer                         // Standard output (for redirections)
+	stdin  io.Reader                         // Standard input (for redirections)
 }
 
 // New creates a new Evaluator
 func New() *Evaluator {
 	cwd, _ := os.Getwd()
+	global := make(map[string]Value)
 	return &Evaluator{
 		cwd:    cwd,
 		env:    make(map[string]string),
-		vars:   make(map[string]Value),
+		vars:   global,
+		scopes: []map[string]Value{global},
+		funcs:  make(map[string]*ast.FunctionStatement),
 		stdout: os.Stdout,
 		stdin:  os.Stdin,
 	}
+}
+
+// pushScope adds a new innermost variable scope (e.g. a function call frame).
+func (e *Evaluator) pushScope() {
+	e.scopes = append(e.scopes, make(map[string]Value))
+}
+
+// popScope removes the innermost scope.
+func (e *Evaluator) popScope() {
+	e.scopes = e.scopes[:len(e.scopes)-1]
+}
+
+// getVar looks up a variable from the innermost scope outward.
+func (e *Evaluator) getVar(name string) (Value, bool) {
+	for i := len(e.scopes) - 1; i >= 0; i-- {
+		if v, ok := e.scopes[i][name]; ok {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// setVar assigns to an existing binding wherever it lives, or creates a new
+// binding in the innermost scope.
+func (e *Evaluator) setVar(name string, val Value) {
+	for i := len(e.scopes) - 1; i >= 0; i-- {
+		if _, ok := e.scopes[i][name]; ok {
+			e.scopes[i][name] = val
+			return
+		}
+	}
+	e.scopes[len(e.scopes)-1][name] = val
+}
+
+// setLocal binds a variable in the innermost scope unconditionally (used for
+// function parameters).
+func (e *Evaluator) setLocal(name string, val Value) {
+	e.scopes[len(e.scopes)-1][name] = val
 }
 
 // Eval evaluates a program and returns the result
@@ -54,10 +136,58 @@ func (e *Evaluator) evalStatement(stmt ast.Statement) error {
 		return e.evalAssignment(s)
 	case *ast.ForStatement:
 		return e.evalForStatement(s)
+	case *ast.WhileStatement:
+		return e.evalWhileStatement(s)
 	case *ast.IfStatement:
 		return e.evalIfStatement(s)
+	case *ast.BreakStatement:
+		return &controlSignal{kind: ctrlBreak}
+	case *ast.ContinueStatement:
+		return &controlSignal{kind: ctrlContinue}
+	case *ast.FunctionStatement:
+		e.funcs[s.Name.Value] = s
+		return nil
+	case *ast.ReturnStatement:
+		return e.evalReturnStatement(s)
 	}
 	return nil
+}
+
+// evalReturnStatement evaluates the return value (if any) and raises a return
+// control signal to unwind to the calling function.
+func (e *Evaluator) evalReturnStatement(stmt *ast.ReturnStatement) error {
+	var val Value
+	if stmt.Value != nil {
+		v, err := e.evalExpressionValue(stmt.Value)
+		if err != nil {
+			return err
+		}
+		val = v
+	}
+	return &controlSignal{kind: ctrlReturn, value: val}
+}
+
+// callFunction invokes a user-defined function with already-evaluated args.
+func (e *Evaluator) callFunction(fn *ast.FunctionStatement, args []Value) (Value, error) {
+	if len(args) != len(fn.Parameters) {
+		return nil, fmt.Errorf("%s() expects %d argument(s), got %d",
+			fn.Name.Value, len(fn.Parameters), len(args))
+	}
+
+	e.pushScope()
+	defer e.popScope()
+	for i, param := range fn.Parameters {
+		e.setLocal(param.Value, args[i])
+	}
+
+	if err := e.evalBlockStatement(fn.Body); err != nil {
+		if sig, ok := asControl(err); ok && sig.kind == ctrlReturn {
+			return sig.value, nil
+		}
+		return nil, err
+	}
+	// Functions with no explicit return yield nil.
+	return nil, nil
 }
 
 // evalExpressionValue evaluates an expression and returns a Value
@@ -74,7 +204,7 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 		return result, err
 	case *ast.Identifier:
 		// Check if it's a variable first
-		if val, ok := e.vars[node.Value]; ok {
+		if val, ok := e.getVar(node.Value); ok {
 			return val, nil
 		}
 		return node.Value, nil
@@ -86,6 +216,8 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 		return node.Value, nil
 	case *ast.VariableReference:
 		return e.expandVariable(node.Name.Value), nil
+	case *ast.CommandSubstitution:
+		return e.evalCommandSubstitution(node)
 	case *ast.InfixExpression:
 		return e.evalInfixExpression(node)
 	case *ast.CallExpression:
@@ -203,11 +335,67 @@ func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
 		return e.execShow(args)
 	case ast.CMD_CLEAR:
 		return e.execClear()
+	case ast.CMD_EXPORT:
+		return e.execExport(args)
+	case ast.CMD_ENV:
+		return e.execEnv()
 	case ast.CMD_TILDE:
 		return e.execHome()
+	case ast.CMD_EXTERNAL:
+		return e.execExternal(cmd.Name, args)
 	default:
 		return "", fmt.Errorf("unknown command: %s", cmd.Name)
 	}
+}
+
+// execExternal runs an external program found on PATH, wiring it to the
+// evaluator's current stdin/stdout/cwd/env so pipes and redirections work.
+func (e *Evaluator) execExternal(name string, args []string) (string, error) {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		// A bare name with no arguments that matches a defined variable is a
+		// value reference (e.g. inspecting `x` or using it in an expression),
+		// not a command invocation.
+		if len(args) == 0 {
+			if val, ok := e.getVar(name); ok {
+				return e.valueToString(val), nil
+			}
+		}
+		return "", fmt.Errorf("%s: command not found", name)
+	}
+
+	c := exec.Command(path, args...)
+	c.Dir = e.cwd
+	c.Stdin = e.stdin
+	c.Stdout = e.stdout
+	c.Stderr = os.Stderr
+	c.Env = e.buildEnv()
+
+	if err := c.Run(); err != nil {
+		// Surface the program's own exit status without a noisy Go wrapper.
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return "", fmt.Errorf("%s: exited with status %d", name, exitErr.ExitCode())
+		}
+		return "", fmt.Errorf("%s: %v", name, err)
+	}
+	return "", nil
+}
+
+// colorOutput reports whether the evaluator's stdout is an interactive
+// terminal, so colored output is suppressed for pipes, captures, and files.
+func (e *Evaluator) colorOutput() bool {
+	f, ok := e.stdout.(*os.File)
+	return ok && f == os.Stdout && term.IsTerminal(int(f.Fd()))
+}
+
+// buildEnv merges the process environment with shell-local variables so
+// external commands see both inherited and user-set ($VAR) values.
+func (e *Evaluator) buildEnv() []string {
+	env := os.Environ()
+	for k, v := range e.env {
+		env = append(env, k+"="+v)
+	}
+	return env
 }
 
 func (e *Evaluator) evalPipe(pipe *ast.PipeExpression) (string, error) {
@@ -306,18 +494,41 @@ func (e *Evaluator) execList(args []string) (string, error) {
 		return "", fmt.Errorf("ls: %v", err)
 	}
 
-	var output bytes.Buffer
+	color := e.colorOutput()
+
+	// Plain (uncolored) listing is also returned so it works in pipes/captures.
+	var plain bytes.Buffer
+	var display bytes.Buffer
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() {
 			name += "/"
 		}
-		output.WriteString(name + "\n")
+		plain.WriteString(name + "\n")
+		display.WriteString(e.colorizeEntry(entry, name, color) + "\n")
 	}
 
-	result := output.String()
-	fmt.Fprint(e.stdout, result)
-	return result, nil
+	fmt.Fprint(e.stdout, display.String())
+	return plain.String(), nil
+}
+
+// colorizeEntry applies a color to a directory listing entry based on its
+// type. When color is false the name is returned unchanged.
+func (e *Evaluator) colorizeEntry(entry os.DirEntry, name string, color bool) string {
+	if !color {
+		return name
+	}
+	switch {
+	case entry.IsDir():
+		return ansi.Wrap(ansi.Bold+ansi.Blue, name)
+	case entry.Type()&os.ModeSymlink != 0:
+		return ansi.Wrap(ansi.Cyan, name)
+	default:
+		if info, err := entry.Info(); err == nil && info.Mode()&0111 != 0 {
+			return ansi.Wrap(ansi.Green, name)
+		}
+		return name
+	}
 }
 
 func (e *Evaluator) execChangeDir(args []string) (string, error) {
@@ -416,7 +627,6 @@ func (e *Evaluator) execWhoami() (string, error) {
 	return username, nil
 }
 
-
 func (e *Evaluator) execHome() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -472,6 +682,60 @@ func (e *Evaluator) execClear() (string, error) {
 	// ANSI escape codes to clear screen and move cursor to home position
 	fmt.Fprint(e.stdout, "\033[2J\033[H")
 	return "", nil
+}
+
+// execExport sets a shell environment variable: export NAME [value...].
+// Remaining arguments are joined with spaces to form the value.
+func (e *Evaluator) execExport(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("export: missing variable name")
+	}
+	name := args[0]
+	value := strings.Join(args[1:], " ")
+	e.env[name] = value
+	return "", nil
+}
+
+// execEnv prints the effective environment (process env with shell-local
+// overrides applied), sorted by name.
+func (e *Evaluator) execEnv() (string, error) {
+	merged := make(map[string]string)
+	for _, kv := range os.Environ() {
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			merged[kv[:i]] = kv[i+1:]
+		}
+	}
+	for k, v := range e.env {
+		merged[k] = v
+	}
+
+	names := make([]string, 0, len(merged))
+	for k := range merged {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	var out bytes.Buffer
+	for _, k := range names {
+		out.WriteString(k + "=" + merged[k] + "\n")
+	}
+	result := out.String()
+	fmt.Fprint(e.stdout, result)
+	return result, nil
+}
+
+// evalCommandSubstitution runs a command with its stdout captured and returns
+// the output as a string with the trailing newline trimmed.
+func (e *Evaluator) evalCommandSubstitution(node *ast.CommandSubstitution) (Value, error) {
+	var buf bytes.Buffer
+	oldStdout := e.stdout
+	e.stdout = &buf
+	_, err := e.evalExpressionValue(node.Command)
+	e.stdout = oldStdout
+	if err != nil {
+		return nil, err
+	}
+	return strings.TrimRight(buf.String(), "\n"), nil
 }
 
 // Helper functions
@@ -531,7 +795,7 @@ func (e *Evaluator) evalAssignment(stmt *ast.AssignmentStatement) error {
 	if err != nil {
 		return err
 	}
-	e.vars[stmt.Name.Value] = val
+	e.setVar(stmt.Name.Value, val)
 	return nil
 }
 
@@ -558,8 +822,43 @@ func (e *Evaluator) evalForStatement(stmt *ast.ForStatement) error {
 
 	// Iterate
 	for _, item := range items {
-		e.vars[stmt.Variable.Value] = item
+		e.setVar(stmt.Variable.Value, item)
 		if err := e.evalBlockStatement(stmt.Body); err != nil {
+			if sig, ok := asControl(err); ok {
+				if sig.kind == ctrlBreak {
+					break
+				}
+				if sig.kind == ctrlContinue {
+					continue
+				}
+			}
+			return err
+		}
+	}
+
+	return nil
+}
+
+// evalWhileStatement handles while loops: while cond { ... }
+func (e *Evaluator) evalWhileStatement(stmt *ast.WhileStatement) error {
+	for {
+		cond, err := e.evalExpressionValue(stmt.Condition)
+		if err != nil {
+			return err
+		}
+		if !e.valueToBool(cond) {
+			break
+		}
+
+		if err := e.evalBlockStatement(stmt.Body); err != nil {
+			if sig, ok := asControl(err); ok {
+				if sig.kind == ctrlBreak {
+					break
+				}
+				if sig.kind == ctrlContinue {
+					continue
+				}
+			}
 			return err
 		}
 	}
@@ -675,9 +974,131 @@ func (e *Evaluator) evalCallExpression(node *ast.CallExpression) (Value, error) 
 		return e.builtinRange(node.Arguments)
 	case "append":
 		return e.builtinAppend(node.Arguments)
-	default:
-		return nil, fmt.Errorf("unknown function: %s", node.Function)
 	}
+
+	// Evaluate arguments once for the remaining builtins and user functions.
+	args := make([]Value, len(node.Arguments))
+	for i, arg := range node.Arguments {
+		val, err := e.evalExpressionValue(arg)
+		if err != nil {
+			return nil, err
+		}
+		args[i] = val
+	}
+
+	switch node.Function {
+	case "len":
+		return e.builtinLen(args)
+	case "split":
+		return e.builtinSplit(args)
+	case "join":
+		return e.builtinJoin(args)
+	case "contains":
+		return e.builtinContains(args)
+	case "upper":
+		return e.builtinStr1(args, "upper", strings.ToUpper)
+	case "lower":
+		return e.builtinStr1(args, "lower", strings.ToLower)
+	case "trim":
+		return e.builtinStr1(args, "trim", strings.TrimSpace)
+	case "replace":
+		return e.builtinReplace(args)
+	}
+
+	// User-defined function.
+	if fn, ok := e.funcs[node.Function]; ok {
+		return e.callFunction(fn, args)
+	}
+
+	return nil, fmt.Errorf("unknown function: %s", node.Function)
+}
+
+// builtinLen returns the length of a string (in runes) or array.
+func (e *Evaluator) builtinLen(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("len() takes exactly 1 argument")
+	}
+	switch v := args[0].(type) {
+	case string:
+		return int64(utf8.RuneCountInString(v)), nil
+	case []Value:
+		return int64(len(v)), nil
+	default:
+		return nil, fmt.Errorf("len() not supported on %T", args[0])
+	}
+}
+
+// builtinSplit splits a string by a separator into an array of strings.
+func (e *Evaluator) builtinSplit(args []Value) (Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("split() takes exactly 2 arguments (string, sep)")
+	}
+	s := e.valueToString(args[0])
+	sep := e.valueToString(args[1])
+	parts := strings.Split(s, sep)
+	result := make([]Value, len(parts))
+	for i, p := range parts {
+		result[i] = p
+	}
+	return result, nil
+}
+
+// builtinJoin joins an array's elements into a string with a separator.
+func (e *Evaluator) builtinJoin(args []Value) (Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("join() takes exactly 2 arguments (array, sep)")
+	}
+	arr, ok := args[0].([]Value)
+	if !ok {
+		return nil, fmt.Errorf("join() first argument must be an array")
+	}
+	sep := e.valueToString(args[1])
+	parts := make([]string, len(arr))
+	for i, el := range arr {
+		parts[i] = e.valueToString(el)
+	}
+	return strings.Join(parts, sep), nil
+}
+
+// builtinContains reports substring membership for strings, or element
+// membership for arrays.
+func (e *Evaluator) builtinContains(args []Value) (Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("contains() takes exactly 2 arguments")
+	}
+	switch container := args[0].(type) {
+	case string:
+		return strings.Contains(container, e.valueToString(args[1])), nil
+	case []Value:
+		target := e.valueToString(args[1])
+		for _, el := range container {
+			if e.valueToString(el) == target {
+				return true, nil
+			}
+		}
+		return false, nil
+	default:
+		return nil, fmt.Errorf("contains() not supported on %T", args[0])
+	}
+}
+
+// builtinStr1 applies a single-argument string transform (upper/lower/trim).
+func (e *Evaluator) builtinStr1(args []Value, name string, fn func(string) string) (Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("%s() takes exactly 1 argument", name)
+	}
+	return fn(e.valueToString(args[0])), nil
+}
+
+// builtinReplace replaces all occurrences of old with new in a string.
+func (e *Evaluator) builtinReplace(args []Value) (Value, error) {
+	if len(args) != 3 {
+		return nil, fmt.Errorf("replace() takes exactly 3 arguments (string, old, new)")
+	}
+	s := e.valueToString(args[0])
+	old := e.valueToString(args[1])
+	newStr := e.valueToString(args[2])
+	return strings.ReplaceAll(s, old, newStr), nil
 }
 
 // builtinRange implements range(n) - returns [0, 1, 2, ..., n-1]

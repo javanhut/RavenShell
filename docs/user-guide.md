@@ -8,19 +8,49 @@ This guide covers everything you need to know to use RavenShell effectively.
 
 - Go 1.21 or later
 
-### Building from Source
+### Installing
 
 ```bash
 git clone https://github.com/yourusername/ravenshell.git
 cd ravenshell
-go build -o ravenshell
+
+# Easiest: install script (uses sudo for /usr/local/bin if needed)
+./install.sh
+
+# Or with make (override the location with PREFIX=...)
+make install                 # /usr/local/bin
+make install PREFIX=~/.local # ~/.local/bin, no sudo
+
+# Or via the Go toolchain
+go install .                 # installs to $(go env GOPATH)/bin
 ```
+
+For a quick local build without installing, run `go build -o ravenshell .`.
 
 ### Verifying Installation
 
 ```bash
-./ravenshell
+ravenshell --version
+ravenshell
 # You should see: Welcome to Raven Shell.
+```
+
+### Setting RavenShell as Your Default Shell
+
+After installing, you can use RavenShell as your login shell:
+
+```bash
+make register-shell   # add the binary to /etc/shells (needs sudo)
+make set-default      # chsh to RavenShell
+```
+
+Log out and back in for the change to take effect. To revert, run
+`chsh -s /bin/zsh` (or your previous shell).
+
+### Uninstalling
+
+```bash
+make uninstall        # removes the installed binary
 ```
 
 ## Getting Started
@@ -53,7 +83,15 @@ automatically disabled when output is piped or redirected.
 Run a `.rsh` script file:
 
 ```bash
-./ravenshell myscript.rsh
+ravenshell myscript.rsh
+```
+
+Run a one-off command, or feed a program in via stdin:
+
+```bash
+ravenshell -c 'print "hello"'
+echo 'print 6 * 7' | ravenshell
+ravenshell < myscript.rsh
 ```
 
 ### Creating Scripts

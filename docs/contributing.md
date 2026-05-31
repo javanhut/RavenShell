@@ -17,12 +17,15 @@ Thank you for your interest in contributing to RavenShell! This document provide
 git clone https://github.com/yourusername/ravenshell.git
 cd ravenshell
 
-# Verify the build
-go build -o ravenshell
+# Verify the build (or: make build)
+go build -o ravenshell .
 
-# Run tests
+# Run tests (or: make test)
 go test ./...
 ```
+
+The `Makefile` provides convenience targets: `make build`, `make test`,
+`make vet`, `make fmt`, `make install`, and `make help` to list them all.
 
 ### Project Overview
 

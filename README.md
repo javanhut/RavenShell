@@ -25,23 +25,66 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 
 ### Installation
 
+Clone the repo, then install with the provided script or `make`:
+
 ```bash
 git clone https://github.com/yourusername/ravenshell.git
 cd ravenshell
-go build -o ravenshell
+
+# Option 1: one-step install script (uses sudo for /usr/local/bin if needed)
+./install.sh
+
+# Option 2: Makefile (override location with PREFIX=...)
+make install                 # installs to /usr/local/bin
+make install PREFIX=~/.local # installs to ~/.local/bin (no sudo)
+
+# Option 3: Go toolchain
+go install .                 # installs to $(go env GOPATH)/bin
+```
+
+To install to a directory without root, set `PREFIX` to a location you own
+(e.g. `~/.local`) and make sure its `bin` is on your `PATH`.
+
+For a quick local build without installing:
+
+```bash
+go build -o ravenshell .
 ```
 
 ### Usage
 
 **Interactive mode:**
 ```bash
-./ravenshell
+ravenshell
 ```
 
 **Run a script:**
 ```bash
-./ravenshell script.rsh
+ravenshell script.rsh
 ```
+
+**Run a one-off command:**
+```bash
+ravenshell -c 'print "hello"'
+```
+
+**From a pipe or redirect:**
+```bash
+echo 'print 6 * 7' | ravenshell
+ravenshell < script.rsh
+```
+
+### Set as Your Default Shell
+
+Once installed, RavenShell can be used as your login shell like any other shell:
+
+```bash
+make register-shell   # adds the binary to /etc/shells (needs sudo)
+make set-default      # chsh -s to RavenShell
+```
+
+Then log out and back in. (To do it manually: add the binary's full path to
+`/etc/shells`, then run `chsh -s /path/to/ravenshell`.)
 
 ### Basic Examples
 

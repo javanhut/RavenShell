@@ -1,0 +1,10 @@
+# Compiled binary
+/ravenshell
+
+# Go build/test artifacts
+*.test
+*.out
+coverage.txt
+
+# Editor/OS cruft
+.DS_Store

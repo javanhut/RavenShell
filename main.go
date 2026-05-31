@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"ravenshell/ansi"
@@ -13,6 +14,24 @@ import (
 
 	"golang.org/x/term"
 )
+
+// version is the RavenShell version, overridable at build time with
+// -ldflags "-X main.version=v1.2.3".
+var version = "dev"
+
+const usage = `RavenShell - a command-line interpreter and scripting language.
+
+Usage:
+  ravenshell                 Start the interactive shell (REPL)
+  ravenshell <script.rsh>    Run a script file
+  ravenshell -c "<command>"  Run a command string and exit
+  ravenshell < script.rsh    Run a program read from standard input
+
+Options:
+  -c, --command <cmd>   Execute the given command string and exit
+  -l, --login           Treated as interactive (accepted for login-shell use)
+  -v, --version         Print the version and exit
+  -h, --help            Show this help and exit`
 
 // stdoutIsTerminal reports whether stdout is an interactive terminal, used to
 // decide whether to emit ANSI color codes.
@@ -29,14 +48,72 @@ func colorize(code, s string) string {
 }
 
 func main() {
-	// Check if a script file was provided as argument
-	if len(os.Args) > 1 {
-		runScript(os.Args[1])
+	args := os.Args[1:]
+	script := ""
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-c" || arg == "--command":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "ravenshell: -c requires an argument")
+				os.Exit(2)
+			}
+			runCommandString(args[i+1])
+			return
+		case arg == "-v" || arg == "--version":
+			fmt.Println("RavenShell " + version)
+			return
+		case arg == "-h" || arg == "--help":
+			fmt.Println(usage)
+			return
+		case strings.HasPrefix(arg, "-"):
+			// Login/interactive and other leading-dash flags (e.g. -l, -i) are
+			// accepted and ignored so RavenShell works as a login shell.
+			continue
+		default:
+			script = arg
+		}
+		if script != "" {
+			break
+		}
+	}
+
+	if script != "" {
+		runScript(script)
 		return
 	}
 
-	fmt.Println("Welcome to Raven Shell.")
-	repl()
+	// A terminal on stdin means interactive use; otherwise read a program from
+	// stdin (e.g. `ravenshell < script.rsh` or piped input).
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Println("Welcome to Raven Shell.")
+		repl()
+	} else {
+		runStdin()
+	}
+}
+
+// runCommandString evaluates a single command string (the -c flag) and exits
+// non-zero if it fails to parse.
+func runCommandString(command string) {
+	eval := evaluator.New()
+	if !runSource(eval, command, "") {
+		os.Exit(1)
+	}
+}
+
+// runStdin reads a complete program from standard input and evaluates it.
+func runStdin() {
+	content, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: cannot read stdin: %v\n", err)
+		os.Exit(1)
+	}
+	eval := evaluator.New()
+	if !runSource(eval, string(content), "") {
+		os.Exit(1)
+	}
 }
 
 // runSource parses and evaluates a complete source string against the given

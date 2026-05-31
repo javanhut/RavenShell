@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"ravenshell/ansi"
+	"sort"
 	"strings"
 
 	"golang.org/x/term"
@@ -32,13 +33,14 @@ type Completer func(line string, pos int) []string
 
 // Readline handles interactive line editing with history and completion
 type Readline struct {
-	prompt      string
-	history     []string
-	historyIdx  int
-	historyFile string // Path to the persistent history file (empty disables)
-	completer   Completer
-	commands    []string      // Built-in commands for completion
-	cwd         func() string // Function to get current working directory
+	prompt          string
+	history         []string
+	historyIdx      int
+	historyFile     string // Path to the persistent history file (empty disables)
+	completer       Completer
+	commands        []string        // Built-in commands for completion
+	cwd             func() string   // Function to get current working directory
+	commandProvider func() []string // Dynamic command names (functions, PATH executables)
 }
 
 // New creates a new Readline instance
@@ -50,7 +52,7 @@ func New(prompt string) *Readline {
 		commands: []string{
 			"ls", "rm", "mkdir", "rmdir", "cd", "cwd",
 			"whoami", "mkfile", "output", "print", "show",
-			"clear", "export", "env",
+			"clear", "export", "env", "raven-add",
 			"for", "while", "if", "else", "fn", "return",
 			"break", "continue", "range", "append",
 			"exit", "quit",
@@ -109,6 +111,12 @@ func (r *Readline) SetCompleter(c Completer) {
 // SetCwdFunc sets a function to get current working directory for path completion
 func (r *Readline) SetCwdFunc(f func() string) {
 	r.cwd = f
+}
+
+// SetCommandProvider sets a function returning additional command names to
+// offer during tab completion (e.g. user-defined functions and PATH executables).
+func (r *Readline) SetCommandProvider(f func() []string) {
+	r.commandProvider = f
 }
 
 // AddHistory adds a line to history (in memory and on disk).
@@ -433,12 +441,27 @@ func (r *Readline) defaultComplete(line string, pos int) []string {
 
 // completeCommand returns matching command names
 func (r *Readline) completeCommand(prefix string) []string {
+	// Merge built-in command names with any dynamically provided names
+	// (user-defined functions and executables on the search/system PATH).
+	seen := make(map[string]bool)
 	var matches []string
-	for _, cmd := range r.commands {
-		if strings.HasPrefix(cmd, prefix) {
-			matches = append(matches, cmd)
+	add := func(name string) {
+		if strings.HasPrefix(name, prefix) && !seen[name] {
+			seen[name] = true
+			matches = append(matches, name)
 		}
 	}
+
+	for _, cmd := range r.commands {
+		add(cmd)
+	}
+	if r.commandProvider != nil {
+		for _, cmd := range r.commandProvider() {
+			add(cmd)
+		}
+	}
+
+	sort.Strings(matches)
 	return matches
 }
 

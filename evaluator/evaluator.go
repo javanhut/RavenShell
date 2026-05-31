@@ -55,20 +55,24 @@ func asControl(err error) (*controlSignal, bool) {
 
 // Evaluator executes AST nodes
 type Evaluator struct {
-	cwd    string                            // Current working directory
-	env    map[string]string                 // Environment variables (for $VAR)
-	vars   map[string]Value                  // Global script variables (== scopes[0])
-	scopes []map[string]Value                // Variable scope chain; innermost is last
-	funcs  map[string]*ast.FunctionStatement // User-defined functions
-	stdout io.Writer                         // Standard output (for redirections)
-	stdin  io.Reader                         // Standard input (for redirections)
+	cwd         string                            // Current working directory
+	env         map[string]string                 // Environment variables (for $VAR)
+	vars        map[string]Value                  // Global script variables (== scopes[0])
+	scopes      []map[string]Value                // Variable scope chain; innermost is last
+	funcs       map[string]*ast.FunctionStatement // User-defined functions
+	searchPaths []string                          // Extra executable search dirs (raven-add path)
+	stdout      io.Writer                         // Standard output (for redirections)
+	stdin       io.Reader                         // Standard input (for redirections)
+
+	execCache      []string // cached executable names from search/system PATH
+	execCacheValid bool
 }
 
 // New creates a new Evaluator
 func New() *Evaluator {
 	cwd, _ := os.Getwd()
 	global := make(map[string]Value)
-	return &Evaluator{
+	e := &Evaluator{
 		cwd:    cwd,
 		env:    make(map[string]string),
 		vars:   global,
@@ -76,6 +80,39 @@ func New() *Evaluator {
 		funcs:  make(map[string]*ast.FunctionStatement),
 		stdout: os.Stdout,
 		stdin:  os.Stdin,
+	}
+	e.loadSearchPaths()
+	return e
+}
+
+// configPath returns the path to a RavenShell config file in the user's home
+// directory, or "" if the home directory cannot be determined.
+func configPath(name string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, name)
+}
+
+// searchPathsFile is where extra executable search directories are persisted.
+const searchPathsFile = ".raven_paths"
+
+// loadSearchPaths reads persisted extra search directories into the evaluator.
+func (e *Evaluator) loadSearchPaths() {
+	path := configPath(searchPathsFile)
+	if path == "" {
+		return
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		dir := strings.TrimSpace(line)
+		if dir != "" {
+			e.searchPaths = append(e.searchPaths, dir)
+		}
 	}
 }
 
@@ -339,6 +376,8 @@ func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
 		return e.execExport(args)
 	case ast.CMD_ENV:
 		return e.execEnv()
+	case ast.CMD_RAVENADD:
+		return e.execRavenAdd(args)
 	case ast.CMD_TILDE:
 		return e.execHome()
 	case ast.CMD_EXTERNAL:
@@ -351,7 +390,7 @@ func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
 // execExternal runs an external program found on PATH, wiring it to the
 // evaluator's current stdin/stdout/cwd/env so pipes and redirections work.
 func (e *Evaluator) execExternal(name string, args []string) (string, error) {
-	path, err := exec.LookPath(name)
+	path, err := e.lookPath(name)
 	if err != nil {
 		// A bare name with no arguments that matches a defined variable is a
 		// value reference (e.g. inspecting `x` or using it in an expression),
@@ -388,11 +427,60 @@ func (e *Evaluator) colorOutput() bool {
 	return ok && f == os.Stdout && term.IsTerminal(int(f.Fd()))
 }
 
-// buildEnv merges the process environment with shell-local variables so
-// external commands see both inherited and user-set ($VAR) values.
+// lookPath resolves a command name to an executable path. Names containing a
+// path separator are resolved against the shell's current directory; bare
+// names are searched in the extra search paths first, then the system PATH.
+func (e *Evaluator) lookPath(name string) (string, error) {
+	if strings.ContainsRune(name, '/') {
+		resolved := e.resolvePath(name)
+		if isExecutableFile(resolved) {
+			return resolved, nil
+		}
+		return "", exec.ErrNotFound
+	}
+
+	for _, dir := range e.searchPaths {
+		candidate := filepath.Join(dir, name)
+		if isExecutableFile(candidate) {
+			return candidate, nil
+		}
+	}
+	return exec.LookPath(name)
+}
+
+// isExecutableFile reports whether path is a regular file with an execute bit.
+func isExecutableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return info.Mode()&0111 != 0
+}
+
+// buildEnv merges the process environment with shell-local variables and the
+// extra search paths (prepended to PATH) so external commands see both
+// inherited and user-set ($VAR) values plus any raven-add path directories.
 func (e *Evaluator) buildEnv() []string {
-	env := os.Environ()
+	merged := make(map[string]string)
+	for _, kv := range os.Environ() {
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			merged[kv[:i]] = kv[i+1:]
+		}
+	}
 	for k, v := range e.env {
+		merged[k] = v
+	}
+	if len(e.searchPaths) > 0 {
+		extra := strings.Join(e.searchPaths, string(os.PathListSeparator))
+		if existing := merged["PATH"]; existing != "" {
+			merged["PATH"] = extra + string(os.PathListSeparator) + existing
+		} else {
+			merged["PATH"] = extra
+		}
+	}
+
+	env := make([]string, 0, len(merged))
+	for k, v := range merged {
 		env = append(env, k+"="+v)
 	}
 	return env
@@ -722,6 +810,131 @@ func (e *Evaluator) execEnv() (string, error) {
 	result := out.String()
 	fmt.Fprint(e.stdout, result)
 	return result, nil
+}
+
+// execRavenAdd handles configuration commands:
+//
+//	raven-add path <dir>   register an extra executable search directory
+//	raven-add path         list the registered search directories
+func (e *Evaluator) execRavenAdd(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("raven-add: usage: raven-add path <dir>")
+	}
+
+	switch args[0] {
+	case "path":
+		if len(args) == 1 {
+			// List current extra search paths.
+			var out bytes.Buffer
+			for _, dir := range e.searchPaths {
+				out.WriteString(dir + "\n")
+			}
+			result := out.String()
+			fmt.Fprint(e.stdout, result)
+			return result, nil
+		}
+
+		dir := e.resolvePath(args[1])
+		info, err := os.Stat(dir)
+		if err != nil {
+			return "", fmt.Errorf("raven-add: %v", err)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("raven-add: %s is not a directory", dir)
+		}
+
+		if e.addSearchPath(dir) {
+			fmt.Fprintf(e.stdout, "added %s to search paths\n", dir)
+		} else {
+			fmt.Fprintf(e.stdout, "%s is already a search path\n", dir)
+		}
+		return "", nil
+
+	default:
+		return "", fmt.Errorf("raven-add: unknown target %q (expected 'path')", args[0])
+	}
+}
+
+// addSearchPath registers dir as an extra executable search directory and
+// persists it. It returns false if dir was already registered.
+func (e *Evaluator) addSearchPath(dir string) bool {
+	for _, existing := range e.searchPaths {
+		if existing == dir {
+			return false
+		}
+	}
+	// New directories take priority over existing ones.
+	e.searchPaths = append([]string{dir}, e.searchPaths...)
+	e.execCacheValid = false
+
+	if path := configPath(searchPathsFile); path != "" {
+		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil {
+			fmt.Fprintln(f, dir)
+			f.Close()
+		}
+	}
+	return true
+}
+
+// FunctionNames returns the names of all user-defined functions.
+func (e *Evaluator) FunctionNames() []string {
+	names := make([]string, 0, len(e.funcs))
+	for name := range e.funcs {
+		names = append(names, name)
+	}
+	return names
+}
+
+// AvailableCommands returns the names of all invokable commands for tab
+// completion: user-defined functions plus executables found in the extra
+// search paths and the system PATH.
+func (e *Evaluator) AvailableCommands() []string {
+	if !e.execCacheValid {
+		e.execCache = e.scanExecutables()
+		e.execCacheValid = true
+	}
+
+	set := make(map[string]bool)
+	for _, name := range e.execCache {
+		set[name] = true
+	}
+	for name := range e.funcs {
+		set[name] = true
+	}
+
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// scanExecutables collects executable file names from the search paths and the
+// system PATH.
+func (e *Evaluator) scanExecutables() []string {
+	set := make(map[string]bool)
+	dirs := append([]string{}, e.searchPaths...)
+	dirs = append(dirs, filepath.SplitList(os.Getenv("PATH"))...)
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if info, err := entry.Info(); err == nil && info.Mode()&0111 != 0 {
+				set[entry.Name()] = true
+			}
+		}
+	}
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	return names
 }
 
 // evalCommandSubstitution runs a command with its stdout captured and returns

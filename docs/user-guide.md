@@ -33,14 +33,20 @@ Start RavenShell without arguments to enter interactive mode:
 ./ravenshell
 ```
 
-You'll see the welcome message and a `#` prompt:
+You'll see the welcome message and a colored prompt showing your current
+directory (the home directory is abbreviated to `~`):
 
 ```
 Welcome to Raven Shell.
-#
+~/projects ❯
 ```
 
-Type commands and press Enter to execute them. Type `exit` or `quit` to leave.
+Type commands and press Enter to execute them. Type `exit` or `quit` to leave
+(or press `Ctrl+D` on an empty line).
+
+When connected to a terminal, RavenShell colorizes the prompt, `ls` output
+(directories, executables, and symlinks), and error messages. Colors are
+automatically disabled when output is piped or redirected.
 
 ### Script Mode
 
@@ -78,12 +84,28 @@ cd                  # Go to home directory
 
 ### Tab Completion
 
-Press `Tab` to complete commands and file paths:
+Press `Tab` to complete the word at the cursor:
 
-- Type `mk` then `Tab` to see `mkdir`, `mkfile`
-- Type `~/Doc` then `Tab` to complete `~/Documents/`
+- **Command names** (first word): built-in commands, your user-defined
+  functions, and executables found on the search/system `PATH`.
+  - Type `mk` then `Tab` to see `mkdir`, `mkfile`
+  - Type `gi` then `Tab` to complete external programs like `git`
+- **File paths** (later words): files and directories relative to the current
+  directory, including `~/`, `/absolute`, and relative paths.
+  - Type `~/Doc` then `Tab` to complete `~/Documents/`
 
-When multiple completions exist, pressing `Tab` shows all options.
+When a single completion matches it is inserted automatically; when several
+match, pressing `Tab` lists all options.
+
+### Autosuggestions
+
+As you type, RavenShell shows a dimmed inline suggestion drawn from your most
+recent matching history entry (fish-style). Accept the full suggestion with:
+
+- **→ (Right Arrow)** at the end of the line
+- **Ctrl+E** or **End**
+
+Keep typing to refine the suggestion, or ignore it.
 
 ### Command History
 
@@ -92,14 +114,16 @@ Use arrow keys to navigate through previously entered commands:
 - **Up Arrow**: Previous command
 - **Down Arrow**: Next command
 
-History is maintained for the current session.
+History is **persistent**: it is saved to `~/.raven_history` and restored across
+sessions, so suggestions and arrow-key recall work for commands from previous
+runs too.
 
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+A` | Move cursor to beginning of line |
-| `Ctrl+E` | Move cursor to end of line |
+| `Ctrl+E` | Move to end of line / accept autosuggestion |
 | `Ctrl+U` | Clear line before cursor |
 | `Ctrl+K` | Clear line after cursor |
 | `Ctrl+W` | Delete word before cursor |
@@ -107,14 +131,14 @@ History is maintained for the current session.
 | `Ctrl+C` | Cancel current input |
 | `Ctrl+D` | Exit (on empty line) / Delete character |
 | `Left Arrow` | Move cursor left |
-| `Right Arrow` | Move cursor right |
 | `Up Arrow` | Previous history entry |
 | `Down Arrow` | Next history entry |
 | `Home` | Move to beginning of line |
-| `End` | Move to end of line |
+| `End` | Move to end of line / accept autosuggestion |
+| `Right Arrow` | Move right / accept autosuggestion (at end of line) |
 | `Delete` | Delete character under cursor |
 | `Backspace` | Delete character before cursor |
-| `Tab` | Auto-complete |
+| `Tab` | Auto-complete command or path |
 
 ## Configuration
 
@@ -140,9 +164,31 @@ workspace = "~/projects"
 ```
 
 **Notes:**
-- The file is executed line-by-line
-- Comments (`#`) and blank lines are ignored
-- Errors in `.ravenrc` are displayed but don't prevent shell startup
+- The file is parsed and run as a complete program, so multi-line constructs
+  (loops, conditionals, functions) work just like in a script.
+- Comments (`#`) and blank lines are ignored.
+- Errors in `.ravenrc` are displayed but don't prevent shell startup.
+
+### Custom Executable Search Paths
+
+Register extra directories to search for external commands with `raven-add path`:
+
+```rsh
+raven-add path ~/scripts        # add a directory
+raven-add path                  # list registered directories
+```
+
+Added directories take priority over the system `PATH` and are saved to
+`~/.raven_paths`, so they persist across sessions. Putting `raven-add path`
+lines in `.ravenrc` works too.
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `~/.ravenrc` | Startup script, run as a program on launch |
+| `~/.raven_history` | Persistent command history |
+| `~/.raven_paths` | Extra executable search directories (`raven-add path`) |
 
 ## Working with Files and Directories
 
@@ -218,14 +264,40 @@ Read input from files:
 print < input.txt           # Read and print file contents
 ```
 
+## Running External Programs
+
+Any command that isn't a built-in runs as an external program found on your
+search/system `PATH`:
+
+```rsh
+git status                  # run git
+python --version            # run python with a flag
+ls -la                      # flags are passed through
+print "a b c" | wc -w       # external programs work in pipes
+```
+
+Use `print` for the shell's own text output; bare words are for invoking
+programs. Register extra search directories with `raven-add path`.
+
 ## Environment Variables
 
-Access system environment variables with `$`:
+Read environment variables with `$` and set them with `export`:
 
 ```rsh
 print $HOME                 # Print home directory
 print $USER                 # Print username
 cd $HOME                    # Change to home directory
+
+export EDITOR vim           # Set a variable
+print $EDITOR               # vim
+env                         # List the environment
+```
+
+Capture a command's output into a value with `$(...)`:
+
+```rsh
+here = $(cwd)
+print "you are in " + here
 ```
 
 ## Path Handling

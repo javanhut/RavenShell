@@ -45,31 +45,34 @@ func (l *Lexer) peekNext() byte {
 }
 
 func (l *Lexer) NextToken() token.Token {
-	sawNewline := l.skipWhitespaceAndComments()
+	sawWhitespace, sawNewline := l.skipWhitespaceAndComments()
 	tok := l.scanToken()
 	tok.PrecededByNewline = sawNewline
+	tok.PrecededByWhitespace = sawWhitespace
 	return tok
 }
 
 // skipWhitespaceAndComments advances past spaces, comments, and newlines,
-// reporting whether any newline was skipped (so the parser can detect line
-// boundaries between commands).
-func (l *Lexer) skipWhitespaceAndComments() bool {
-	sawNewline := false
+// reporting whether any whitespace/comment was skipped and whether any of it
+// was a newline (so the parser can detect token adjacency and line boundaries).
+func (l *Lexer) skipWhitespaceAndComments() (sawWhitespace, sawNewline bool) {
 	for {
 		ch := l.peek()
 		if ch == '\n' {
+			sawWhitespace = true
 			sawNewline = true
 			l.advance()
 		} else if unicode.IsSpace(rune(ch)) {
+			sawWhitespace = true
 			l.advance()
 		} else if ch == '#' {
 			// Skip a comment up to (but not including) the end of line.
+			sawWhitespace = true
 			for l.peek() != '\n' && l.peek() != 0 {
 				l.advance()
 			}
 		} else {
-			return sawNewline
+			return sawWhitespace, sawNewline
 		}
 	}
 }
@@ -223,8 +226,20 @@ func (l *Lexer) scanToken() token.Token {
 		return token.Token{Type: token.INTEGER, Literal: l.input[start:l.pos]}
 	} else if unicode.IsLetter(rune(ch)) || ch == '_' {
 		start := l.pos
-		for isAlphanumeric(l.peek()) {
-			l.advance()
+		for {
+			c := l.peek()
+			if isAlphanumeric(c) {
+				l.advance()
+				continue
+			}
+			// Allow '-' to join words inside an identifier (raven-add,
+			// docker-compose) but only when it sits between word characters,
+			// so leading flags (-l) and spaced subtraction (a - b) are unaffected.
+			if c == '-' && isAlphanumeric(l.peekNext()) {
+				l.advance()
+				continue
+			}
+			break
 		}
 		literal := l.input[start:l.pos]
 		// Check if it's a keyword

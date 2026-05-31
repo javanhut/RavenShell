@@ -9,6 +9,11 @@ type Token struct {
 	// immediately before this token. The parser uses it to terminate a
 	// command's argument list at the end of a line.
 	PrecededByNewline bool
+	// PrecededByWhitespace is true when any whitespace (space, tab, newline) or
+	// a comment was skipped before this token. The parser uses it so adjacent
+	// tokens only join into a path when there is no space between them
+	// (foo/bar joins, but `foo /bar` is two arguments).
+	PrecededByWhitespace bool
 }
 
 const (
@@ -35,6 +40,7 @@ const (
 	CLEAR      TokenType = "CLEAR"
 	EXPORT     TokenType = "EXPORT"
 	ENV        TokenType = "ENV"
+	RAVENADD   TokenType = "RAVENADD"
 	GREATER    TokenType = "GREATER"
 	INTO       TokenType = "INTO"
 	LESS       TokenType = "LESS"
@@ -80,29 +86,30 @@ const (
 )
 
 var TokenMap = map[string]TokenType{
-	"ls":       LIST,
-	"rm":       REMOVE,
-	"mkdir":    MAKEDIR,
-	"rmdir":    REMOVEDIR,
-	"cd":       CHANGEDIR,
-	"cwd":      CURRENTDIR,
-	"whoami":   WHOAMI,
-	"mkfile":   MAKEFILE,
-	"output":   OUTPUT,
-	"print":    PRINT,
-	"show":     SHOW,
-	"clear":    CLEAR,
-	"export":   EXPORT,
-	"env":      ENV,
-	"for":      FOR,
-	"in":       IN,
-	"if":       IF,
-	"else":     ELSE,
-	"range":    RANGE,
-	"append":   APPEND,
-	"while":    WHILE,
-	"break":    BREAK,
-	"continue": CONTINUE,
-	"fn":       FN,
-	"return":   RETURN,
+	"ls":        LIST,
+	"rm":        REMOVE,
+	"mkdir":     MAKEDIR,
+	"rmdir":     REMOVEDIR,
+	"cd":        CHANGEDIR,
+	"cwd":       CURRENTDIR,
+	"whoami":    WHOAMI,
+	"mkfile":    MAKEFILE,
+	"output":    OUTPUT,
+	"print":     PRINT,
+	"show":      SHOW,
+	"clear":     CLEAR,
+	"export":    EXPORT,
+	"env":       ENV,
+	"raven-add": RAVENADD,
+	"for":       FOR,
+	"in":        IN,
+	"if":        IF,
+	"else":      ELSE,
+	"range":     RANGE,
+	"append":    APPEND,
+	"while":     WHILE,
+	"break":     BREAK,
+	"continue":  CONTINUE,
+	"fn":        FN,
+	"return":    RETURN,
 }

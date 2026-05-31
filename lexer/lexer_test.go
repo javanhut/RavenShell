@@ -73,6 +73,31 @@ func TestMinusVsFlag(t *testing.T) {
 	}
 }
 
+func TestHyphenatedIdentifiers(t *testing.T) {
+	// Hyphens join words inside a command name, but a spaced flag stays a flag.
+	l := NewLexer("docker-compose up")
+	tok := l.NextToken()
+	if tok.Type != token.IDENT || tok.Literal != "docker-compose" {
+		t.Fatalf("got {%q %q}, want IDENT docker-compose", tok.Type, tok.Literal)
+	}
+	if tok2 := l.NextToken(); tok2.Type != token.IDENT || tok2.Literal != "up" {
+		t.Fatalf("got {%q %q}, want IDENT up", tok2.Type, tok2.Literal)
+	}
+
+	// raven-add lexes as a single token so it can be a keyword command.
+	l2 := NewLexer("raven-add path /opt/bin")
+	if tok := l2.NextToken(); tok.Literal != "raven-add" {
+		t.Fatalf("got %q, want raven-add", tok.Literal)
+	}
+
+	// A flag still lexes as a flag after a space.
+	l3 := NewLexer("tool -l")
+	l3.NextToken() // tool
+	if tok := l3.NextToken(); tok.Type != token.FLAG || tok.Literal != "-l" {
+		t.Fatalf("got {%q %q}, want FLAG -l", tok.Type, tok.Literal)
+	}
+}
+
 func TestPrecededByNewline(t *testing.T) {
 	input := "print x\ngit status"
 	types := []token.TokenType{token.PRINT, token.IDENT, token.IDENT, token.IDENT, token.EOF}

@@ -4,7 +4,9 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 
 ## Features
 
-- **Interactive REPL** - Full-featured command line with tab completion, line editing, and a colored prompt
+- **Interactive REPL** - Full-featured command line with line editing and a colored prompt
+- **Smart Tab Completion** - Completes built-ins, user-defined functions, `$PATH` executables, and file paths
+- **Custom Search Paths** - `raven-add path <dir>` registers extra executable directories (saved to `~/.raven_paths`)
 - **Fish-style Autosuggestions** - As you type, the most recent matching command appears dimmed inline; accept it with → / Ctrl-E / End
 - **Persistent History** - Command history is saved to `~/.raven_history` and restored across sessions
 - **ANSI Colors** - Colorized prompt, `ls` output (directories/executables/symlinks), and error messages (only when attached to a terminal)
@@ -108,6 +110,10 @@ ls > files.txt
 git status
 python --version
 print "hello" | wc -w
+
+# Register an extra directory to search for executables (persisted)
+raven-add path ~/scripts
+raven-add path            # list registered search paths
 ```
 
 > Note: language-level text output uses the built-in `print`. Bare words that

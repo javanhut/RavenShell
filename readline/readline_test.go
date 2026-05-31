@@ -59,6 +59,35 @@ func TestAddHistoryDedupConsecutive(t *testing.T) {
 	}
 }
 
+func TestCompleteCommandMergesProvider(t *testing.T) {
+	r := newTestReadline()
+	r.commands = []string{"print", "ls", "raven-add"}
+	r.SetCommandProvider(func() []string {
+		return []string{"raventool", "myfunc", "raven-add"} // includes a duplicate
+	})
+
+	matches := r.completeCommand("raven")
+	// Expect built-in "raven-add" + provided "raventool", deduped and sorted.
+	want := map[string]bool{"raven-add": true, "raventool": true}
+	if len(matches) != len(want) {
+		t.Fatalf("matches = %v, want keys %v", matches, want)
+	}
+	for _, m := range matches {
+		if !want[m] {
+			t.Errorf("unexpected match %q", m)
+		}
+	}
+	// Sorted order.
+	if matches[0] != "raven-add" || matches[1] != "raventool" {
+		t.Errorf("matches not sorted: %v", matches)
+	}
+
+	// A prefix matching only a provided function.
+	if got := r.completeCommand("myf"); len(got) != 1 || got[0] != "myfunc" {
+		t.Errorf("completeCommand(myf) = %v, want [myfunc]", got)
+	}
+}
+
 func TestHistoryPersistence(t *testing.T) {
 	dir := t.TempDir()
 	histPath := filepath.Join(dir, ".raven_history")

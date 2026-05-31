@@ -282,6 +282,104 @@ When used alone, prints the home directory path.
 
 ---
 
+## Environment Commands
+
+### export - Set Environment Variable
+
+Sets a shell environment variable. The value is the remaining arguments joined
+by spaces. Exported variables are visible via `$NAME` and are passed to external
+commands.
+
+**Syntax:**
+```
+export NAME [value...]
+```
+
+**Examples:**
+```rsh
+export EDITOR vim
+print $EDITOR               # vim
+
+export GREETING hello world
+print $GREETING             # hello world
+```
+
+---
+
+### env - List Environment
+
+Prints the effective environment (process environment with shell-local
+`export` overrides applied), sorted by name.
+
+**Syntax:**
+```
+env
+```
+
+**Example:**
+```rsh
+env
+env | grep PATH             # combine with an external command
+```
+
+---
+
+## Configuration Commands
+
+### raven-add - Manage Shell Configuration
+
+Registers extra configuration for the shell. Currently supports adding
+executable search directories.
+
+**Syntax:**
+```
+raven-add path <dir>        # add an executable search directory
+raven-add path              # list registered search directories
+```
+
+**Behavior:**
+- `<dir>` must exist and be a directory.
+- Added directories take priority over the system `PATH` when resolving
+  external commands.
+- Entries are persisted to `~/.raven_paths` and reloaded on startup.
+
+**Examples:**
+```rsh
+raven-add path ~/scripts    # register ~/scripts
+raven-add path /opt/tools/bin
+raven-add path              # list current search paths
+```
+
+---
+
+## External Commands
+
+Any command that is not a built-in is executed as an external program. The shell
+searches the directories registered with `raven-add path` first, then the
+system `PATH`.
+
+**Syntax:**
+```
+program [args...] [flags...]
+```
+
+**Examples:**
+```rsh
+git status
+python --version
+ls -la
+grep -n "TODO" notes.txt
+print "a b c" | wc -w       # external commands work in pipes
+```
+
+**Notes:**
+- Flags (`-l`, `--all`, `--max-count=5`) are passed through to the program.
+- Command names may contain hyphens (e.g. `docker-compose`).
+- The command runs in the shell's current working directory and inherits the
+  shell environment (including `export`ed variables).
+
+---
+
 ## Session Commands
 
 ### exit / quit

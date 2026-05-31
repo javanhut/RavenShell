@@ -35,7 +35,8 @@ RavenShell is organized into these main packages:
 | `ast` | Abstract Syntax Tree nodes |
 | `parser` | Pratt parser implementation |
 | `evaluator` | AST execution |
-| `readline` | Interactive line editing |
+| `readline` | Interactive line editing, completion, autosuggestions |
+| `ansi` | ANSI color escape codes and helpers |
 
 See [architecture.md](architecture.md) for detailed technical documentation.
 

@@ -131,24 +131,48 @@ if age >= 18 {
 }
 ```
 
-### Nested Conditionals
+### Else-If Chains
 
 ```rsh
 score = 85
 
 if score >= 90 {
     print "Grade: A"
+} else if score >= 80 {
+    print "Grade: B"
+} else if score >= 70 {
+    print "Grade: C"
 } else {
-    if score >= 80 {
-        print "Grade: B"
-    } else {
-        if score >= 70 {
-            print "Grade: C"
-        } else {
-            print "Grade: F"
-        }
-    }
+    print "Grade: F"
 }
+```
+
+### While Loops
+
+```rsh
+# Count down from 5
+n = 5
+while n > 0 {
+    print n
+    n = n - 1
+}
+print "Liftoff!"
+```
+
+### break and continue
+
+```rsh
+# Print the first few odd numbers, stopping past 7
+for i in range(100) {
+    if i % 2 == 0 {
+        continue        # skip even numbers
+    }
+    if i > 7 {
+        break           # stop once past 7
+    }
+    print i
+}
+# Output: 1 3 5 7
 ```
 
 ### Counting Loop
@@ -212,6 +236,101 @@ print odds
 # Output: [1, 3, 5, 7, 9]
 ```
 
+## Functions
+
+### Basic Function
+
+```rsh
+fn greet(name) {
+    print "Hello, " + name + "!"
+}
+
+greet("RavenShell")     # Hello, RavenShell!
+```
+
+### Return Values
+
+```rsh
+fn add(a, b) {
+    return a + b
+}
+
+fn square(n) {
+    return n * n
+}
+
+print add(3, 4)         # 7
+print square(5)         # 25
+```
+
+### Recursion
+
+```rsh
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+print factorial(5)      # 120
+
+fn fib(n) {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+for i in range(10) {
+    print fib(i)
+}
+```
+
+## String Processing
+
+```rsh
+# Split a CSV row into fields
+row = "alice,30,engineer"
+fields = split(row, ",")
+print fields            # [alice, 30, engineer]
+print fields[0]         # alice
+
+# Join an array into a string
+words = ["the", "quick", "fox"]
+print join(words, " ")  # the quick fox
+
+# Transform and inspect strings
+print upper("ravenshell")           # RAVENSHELL
+print lower("LOUD")                 # loud
+print trim("   padded   ") + "!"    # padded!
+print len("hello")                  # 5
+print contains("hello world", "wor") # true
+print replace("a-b-a", "a", "x")    # x-b-x
+```
+
+## Command Substitution and External Commands
+
+```rsh
+# Capture command output into a variable
+here = $(cwd)
+print "Working in: " + here
+
+user = $(whoami)
+print "Hello, " + user
+
+# Run external programs (anything not built in)
+git status
+python --version
+
+# External commands in pipes
+print "one two three four" | wc -w   # 4
+
+# Environment variables
+export PROJECT RavenShell
+print "Project: " + $PROJECT
+```
+
 ## Pipes and Redirection
 
 ### Basic Pipe
@@ -265,16 +384,12 @@ Classic programming exercise:
 for i in range(20) {
     if i % 15 == 0 {
         print "FizzBuzz"
+    } else if i % 3 == 0 {
+        print "Fizz"
+    } else if i % 5 == 0 {
+        print "Buzz"
     } else {
-        if i % 3 == 0 {
-            print "Fizz"
-        } else {
-            if i % 5 == 0 {
-                print "Buzz"
-            } else {
-                print i
-            }
-        }
+        print i
     }
 }
 ```

@@ -104,6 +104,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.CLEAR, p.parseCommandKeyword)
 	p.registerPrefix(token.EXPORT, p.parseCommandKeyword)
 	p.registerPrefix(token.ENV, p.parseCommandKeyword)
+	p.registerPrefix(token.RAVENADD, p.parseCommandKeyword)
 
 	// Register infix parse functions
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
@@ -275,8 +276,9 @@ func (p *Parser) parseIdentifierOrCommand() ast.Expression {
 		return p.parseCallExpression()
 	}
 
-	// Check if this identifier is followed by path tokens (e.g., file.txt, foo/bar)
-	if p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP) {
+	// Check if this identifier is directly followed (no space) by path tokens
+	// (e.g., file.txt, foo/bar). A space means a separate argument.
+	if (p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP)) && !p.peekToken.PrecededByWhitespace {
 		path := p.parsePathFromIdent()
 		if cmdPos {
 			// e.g. ./script.sh or bin/tool at the start of a statement
@@ -448,6 +450,10 @@ func (p *Parser) parsePath() ast.Expression {
 
 	// Continue while next token is part of a path
 	for p.isPathToken(p.peekToken.Type) {
+		// A space ends the path; the next token is a separate argument.
+		if p.peekToken.PrecededByWhitespace {
+			break
+		}
 		// After an extension (. + IDENT), only continue if next is FSLASH
 		if lastWasExtension && !p.peekTokenIs(token.FSLASH) {
 			break
@@ -477,6 +483,10 @@ func (p *Parser) parsePathFromIdent() ast.Expression {
 
 	// Continue while next token is part of a path
 	for p.isPathToken(p.peekToken.Type) {
+		// A space ends the path; the next token is a separate argument.
+		if p.peekToken.PrecededByWhitespace {
+			break
+		}
 		// After an extension (. + IDENT), only continue if next is FSLASH
 		if lastWasExtension && !p.peekTokenIs(token.FSLASH) {
 			break
@@ -498,8 +508,8 @@ func (p *Parser) parseTilde() ast.Expression {
 	cmdPos := p.prefixCmdPos
 	p.prefixCmdPos = false
 
-	// If followed by FSLASH, it's a path like ~/foo
-	if p.peekTokenIs(token.FSLASH) {
+	// If directly followed by FSLASH (no space), it's a path like ~/foo
+	if p.peekTokenIs(token.FSLASH) && !p.peekToken.PrecededByWhitespace {
 		path := p.parsePath()
 		if cmdPos {
 			// e.g. ~/bin/tool at the start of a statement
@@ -593,8 +603,8 @@ func (p *Parser) parseRedirectionTarget() ast.Expression {
 		token.WHOAMI, token.CURRENTDIR, token.MAKEFILE, token.OUTPUT, token.PRINT,
 		token.SHOW, token.CLEAR, token.FOR, token.IN, token.IF, token.ELSE,
 		token.RANGE, token.APPEND:
-		// Check if followed by path tokens (e.g., output.txt, foo/bar)
-		if p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP) {
+		// Check if directly followed by path tokens (e.g., output.txt, foo/bar)
+		if (p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP)) && !p.peekToken.PrecededByWhitespace {
 			return p.parsePathFromIdent()
 		}
 		// Plain identifier
@@ -646,6 +656,8 @@ func tokenTypeToCommandType(tt token.TokenType) ast.CommandType {
 		return ast.CMD_EXPORT
 	case token.ENV:
 		return ast.CMD_ENV
+	case token.RAVENADD:
+		return ast.CMD_RAVENADD
 	default:
 		return ast.CMD_EXTERNAL
 	}

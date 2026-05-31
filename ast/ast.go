@@ -138,6 +138,7 @@ const (
 	CMD_CLEAR      CommandType = "clear"
 	CMD_EXPORT     CommandType = "export"
 	CMD_ENV        CommandType = "env"
+	CMD_RAVENADD   CommandType = "raven-add"
 	CMD_TILDE      CommandType = "~"
 	CMD_EXTERNAL   CommandType = "external"
 )

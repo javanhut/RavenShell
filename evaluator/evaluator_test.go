@@ -2,6 +2,8 @@ package evaluator
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"ravenshell/lexer"
 	"ravenshell/parser"
 	"strings"
@@ -225,6 +227,63 @@ func TestContainsArrayMembership(t *testing.T) {
 	e, _ := run(t, `r = contains(["a", "b", "c"], "b")`)
 	if e.vars["r"] != true {
 		t.Errorf("r = %v, want true", e.vars["r"])
+	}
+}
+
+func TestSearchPathLookup(t *testing.T) {
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "mytool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\necho hi\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	e := New()
+	e.searchPaths = []string{dir}
+
+	got, err := e.lookPath("mytool")
+	if err != nil {
+		t.Fatalf("lookPath(mytool) error: %v", err)
+	}
+	if got != tool {
+		t.Errorf("lookPath = %q, want %q", got, tool)
+	}
+
+	// A non-executable file in the search path is not resolved.
+	plain := filepath.Join(dir, "notexec")
+	os.WriteFile(plain, []byte("x"), 0644)
+	if _, err := e.lookPath("notexec"); err == nil {
+		t.Error("expected lookup of non-executable to fail")
+	}
+}
+
+func TestAvailableCommandsIncludesFunctionsAndExecutables(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "zztool"), []byte("#!/bin/sh\n"), 0755)
+
+	e := New()
+	e.searchPaths = []string{dir}
+	// Define a user function.
+	run := func(src string) {
+		l := lexer.NewLexer(src)
+		p := parser.New(l)
+		e.Eval(p.ParseProgram())
+	}
+	run("fn myfunc(a) { return a }")
+
+	cmds := e.AvailableCommands()
+	has := func(name string) bool {
+		for _, c := range cmds {
+			if c == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("myfunc") {
+		t.Error("AvailableCommands missing user function myfunc")
+	}
+	if !has("zztool") {
+		t.Error("AvailableCommands missing search-path executable zztool")
 	}
 }
 

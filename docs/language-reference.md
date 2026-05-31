@@ -4,7 +4,9 @@ This document provides a complete reference for the RavenShell scripting languag
 
 ## Overview
 
-RavenShell uses a Go-like syntax that combines shell commands with scripting capabilities. Scripts are stored in `.rsh` files and executed line by line.
+RavenShell uses a Go-like syntax that combines shell commands with scripting capabilities. Scripts are stored in `.rsh` files and parsed as a whole program (multi-line constructs such as loops, conditionals, and functions are fully supported).
+
+Statements are separated by newlines: a newline ends a command's argument list, so each line is its own statement. Within a `{ ... }` block you can place one statement per line.
 
 ## Comments
 
@@ -94,12 +96,40 @@ print x         # Prints 10
 
 ### Environment Variables
 
-Access system environment variables with `$`:
+Access environment variables with `$`. Lookups check shell-local variables set
+with `export` first, then the process environment:
 
 ```rsh
 print $HOME     # Prints home directory
 print $USER     # Prints username
 path = $HOME + "/documents"
+```
+
+Set a shell environment variable with `export` (the value is the remaining
+arguments joined by spaces). Exported variables are visible to `$NAME` and are
+passed to external commands:
+
+```rsh
+export EDITOR vim
+print $EDITOR           # vim
+
+export GREETING hello world
+print $GREETING         # hello world
+```
+
+Use `env` to list the effective environment.
+
+### Command Substitution
+
+`$(command)` runs a command and substitutes its captured output (with the
+trailing newline trimmed) as a string value:
+
+```rsh
+here = $(cwd)
+print "running in " + here
+
+user = $(whoami)
+print "hello " + user
 ```
 
 ## Operators
@@ -118,6 +148,11 @@ path = $HOME + "/documents"
 result = 10 + 5 * 2     # 20 (multiplication first)
 remainder = 17 % 5       # 2
 ```
+
+> **Spacing matters for `-`.** Put spaces around arithmetic operators
+> (`a - b`). A `-` glued to a word (`-l`, `--all`) is parsed as a command
+> *flag*, and a `-` between word characters (`docker-compose`) is part of an
+> identifier/command name. So write subtraction as `a - b`, not `a-b`.
 
 ### Comparison Operators
 
@@ -206,17 +241,15 @@ if count == 0 {
 }
 ```
 
-Nested conditionals:
+**Else-if chains:**
 
 ```rsh
 if x > 10 {
     print "large"
+} else if x > 5 {
+    print "medium"
 } else {
-    if x > 5 {
-        print "medium"
-    } else {
-        print "small"
-    }
+    print "small"
 }
 ```
 
@@ -246,6 +279,80 @@ fruits = ["apple", "banana", "cherry"]
 for fruit in fruits {
     print fruit
 }
+```
+
+### While Loops
+
+Repeat while a condition is true:
+
+```rsh
+while condition {
+    # statements
+}
+```
+
+**Example:**
+
+```rsh
+i = 0
+while i < 5 {
+    print i
+    i = i + 1
+}
+# Output: 0 1 2 3 4
+```
+
+### break and continue
+
+`break` exits the nearest enclosing loop; `continue` skips to the next
+iteration. Both work in `for` and `while` loops:
+
+```rsh
+for i in range(100) {
+    if i % 2 == 0 {
+        continue        # skip even numbers
+    }
+    if i > 7 {
+        break           # stop once past 7
+    }
+    print i
+}
+# Output: 1 3 5 7
+```
+
+## Functions
+
+Define reusable functions with `fn`. Functions take parameters, may `return` a
+value, and support recursion:
+
+```rsh
+fn add(a, b) {
+    return a + b
+}
+
+fn factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+print add(3, 4)         # 7
+print factorial(5)      # 120
+```
+
+**Scope:** each call gets its own scope. Parameters and variables created inside
+a function are local to that call (they don't leak out), while existing outer
+variables remain readable. A bare `return` (no value) exits early and yields an
+empty value.
+
+```rsh
+x = 100
+fn double(x) {          # parameter x shadows the global
+    return x * 2
+}
+print double(5)         # 10
+print x                 # 100 (unchanged)
 ```
 
 ## Built-in Functions
@@ -297,6 +404,43 @@ items = append(items, "second")
 print items
 # Output: [first, second]
 ```
+
+### String and Collection Functions
+
+| Function | Description | Example | Result |
+|----------|-------------|---------|--------|
+| `len(x)` | Length of a string (runes) or array | `len("hello")` | `5` |
+| `split(s, sep)` | Split a string into an array | `split("a,b,c", ",")` | `[a, b, c]` |
+| `join(arr, sep)` | Join an array into a string | `join(["a","b"], "-")` | `a-b` |
+| `contains(s, sub)` | Substring test, or array membership | `contains("hello", "ell")` | `true` |
+| `upper(s)` | Uppercase a string | `upper("hi")` | `HI` |
+| `lower(s)` | Lowercase a string | `lower("HI")` | `hi` |
+| `trim(s)` | Trim leading/trailing whitespace | `trim("  hi  ")` | `hi` |
+| `replace(s, old, new)` | Replace all occurrences | `replace("a-a", "a", "x")` | `x-x` |
+
+```rsh
+parts = split("alpha,beta,gamma", ",")
+print len(parts)            # 3
+print join(parts, " | ")    # alpha | beta | gamma
+print contains(parts, "beta")   # true (array membership)
+print upper("ravenshell")   # RAVENSHELL
+```
+
+## External Commands
+
+Any bare word at the start of a statement that is not a built-in is run as an
+external program found on `PATH` (or in a directory added with `raven-add
+path`). External commands accept flags and participate in pipes and redirection:
+
+```rsh
+git status
+python --version
+print "one two three" | wc -w
+ls -la
+```
+
+Command names may contain hyphens (`docker-compose up`). Output produced by the
+language itself uses the built-in `print`; bare words are for invoking programs.
 
 ## Arrays
 

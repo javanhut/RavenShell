@@ -123,6 +123,9 @@ func repl() {
 	// Set up path completion to use evaluator's current directory
 	rl.SetCwdFunc(eval.GetCwd)
 
+	// Offer user-defined functions and PATH executables as tab completions.
+	rl.SetCommandProvider(eval.AvailableCommands)
+
 	for {
 		// Refresh the prompt so it reflects the current directory after cd.
 		rl.SetPrompt(makePrompt(eval.GetCwd()))

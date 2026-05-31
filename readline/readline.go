@@ -1,9 +1,11 @@
 package readline
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"ravenshell/ansi"
 	"strings"
 
 	"golang.org/x/term"
@@ -30,26 +32,73 @@ type Completer func(line string, pos int) []string
 
 // Readline handles interactive line editing with history and completion
 type Readline struct {
-	prompt     string
-	history    []string
-	historyIdx int
-	completer  Completer
-	commands   []string // Built-in commands for completion
-	cwd        func() string // Function to get current working directory
+	prompt      string
+	history     []string
+	historyIdx  int
+	historyFile string // Path to the persistent history file (empty disables)
+	completer   Completer
+	commands    []string      // Built-in commands for completion
+	cwd         func() string // Function to get current working directory
 }
 
 // New creates a new Readline instance
 func New(prompt string) *Readline {
-	return &Readline{
+	r := &Readline{
 		prompt:     prompt,
 		history:    make([]string, 0),
 		historyIdx: -1,
 		commands: []string{
 			"ls", "rm", "mkdir", "rmdir", "cd", "cwd",
 			"whoami", "mkfile", "output", "print", "show",
+			"clear", "export", "env",
+			"for", "while", "if", "else", "fn", "return",
+			"break", "continue", "range", "append",
 			"exit", "quit",
 		},
 	}
+
+	// Persist history across sessions in ~/.raven_history (fish-style).
+	if home, err := os.UserHomeDir(); err == nil {
+		r.historyFile = filepath.Join(home, ".raven_history")
+		r.loadHistory()
+	}
+
+	return r
+}
+
+// loadHistory reads the persistent history file into memory.
+func (r *Readline) loadHistory() {
+	file, err := os.Open(r.historyFile)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		// Collapse consecutive duplicates as they are loaded.
+		if len(r.history) > 0 && r.history[len(r.history)-1] == line {
+			continue
+		}
+		r.history = append(r.history, line)
+	}
+}
+
+// appendHistoryFile appends a single entry to the persistent history file.
+func (r *Readline) appendHistoryFile(line string) {
+	if r.historyFile == "" {
+		return
+	}
+	file, err := os.OpenFile(r.historyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	fmt.Fprintln(file, line)
 }
 
 // SetCompleter sets a custom completion function
@@ -62,7 +111,7 @@ func (r *Readline) SetCwdFunc(f func() string) {
 	r.cwd = f
 }
 
-// AddHistory adds a line to history
+// AddHistory adds a line to history (in memory and on disk).
 func (r *Readline) AddHistory(line string) {
 	if line == "" {
 		return
@@ -72,6 +121,35 @@ func (r *Readline) AddHistory(line string) {
 		return
 	}
 	r.history = append(r.history, line)
+	r.appendHistoryFile(line)
+}
+
+// suggestionFor returns the most recent history entry that begins with line
+// (and is longer than it), or "" if there is none. Used for the fish-style
+// inline autosuggestion.
+func (r *Readline) suggestionFor(line string) string {
+	if line == "" {
+		return ""
+	}
+	for i := len(r.history) - 1; i >= 0; i-- {
+		entry := r.history[i]
+		if len(entry) > len(line) && strings.HasPrefix(entry, line) {
+			return entry
+		}
+	}
+	return ""
+}
+
+// tryAcceptSuggestion, when the cursor is at the end of the line and an
+// autosuggestion exists, returns the accepted line and true.
+func (r *Readline) tryAcceptSuggestion(line []rune, pos int) ([]rune, int, bool) {
+	if pos == len(line) {
+		if sug := r.suggestionFor(string(line)); sug != "" {
+			accepted := []rune(sug)
+			return accepted, len(accepted), true
+		}
+	}
+	return line, pos, false
 }
 
 // ReadLine reads a line with editing support
@@ -102,12 +180,15 @@ func (r *Readline) ReadLine() (string, error) {
 
 		switch buf[0] {
 		case keyEnter:
+			// Redraw without the autosuggestion before committing the line.
+			r.draw(line, len(line), "")
 			fmt.Print("\r\n")
 			result := string(line)
 			r.AddHistory(result)
 			return result, nil
 
 		case keyCtrlC:
+			r.draw(line, len(line), "")
 			fmt.Print("^C\r\n")
 			return "", nil
 
@@ -119,32 +200,36 @@ func (r *Readline) ReadLine() (string, error) {
 			// Delete char under cursor
 			if pos < len(line) {
 				line = append(line[:pos], line[pos+1:]...)
-				r.redraw(line, pos)
+				r.refresh(line, pos)
 			}
 
 		case keyBackspace:
 			if pos > 0 {
 				line = append(line[:pos-1], line[pos:]...)
 				pos--
-				r.redraw(line, pos)
+				r.refresh(line, pos)
 			}
 
 		case keyCtrlA: // Home
 			pos = 0
-			r.redraw(line, pos)
+			r.refresh(line, pos)
 
-		case keyCtrlE: // End
-			pos = len(line)
-			r.redraw(line, pos)
+		case keyCtrlE: // End / accept autosuggestion
+			if nl, np, ok := r.tryAcceptSuggestion(line, pos); ok {
+				line, pos = nl, np
+			} else {
+				pos = len(line)
+			}
+			r.refresh(line, pos)
 
 		case keyCtrlU: // Clear line before cursor
 			line = line[pos:]
 			pos = 0
-			r.redraw(line, pos)
+			r.refresh(line, pos)
 
 		case keyCtrlK: // Clear line after cursor
 			line = line[:pos]
-			r.redraw(line, pos)
+			r.refresh(line, pos)
 
 		case keyCtrlW: // Delete word before cursor
 			if pos > 0 {
@@ -158,13 +243,13 @@ func (r *Readline) ReadLine() (string, error) {
 				}
 				line = append(line[:start], line[pos:]...)
 				pos = start
-				r.redraw(line, pos)
+				r.refresh(line, pos)
 			}
 
 		case keyCtrlL: // Clear screen
 			fmt.Print("\033[2J\033[H")
 			fmt.Print(r.prompt)
-			r.redraw(line, pos)
+			r.refresh(line, pos)
 
 		case keyTab:
 			completions := r.complete(string(line), pos)
@@ -173,7 +258,7 @@ func (r *Readline) ReadLine() (string, error) {
 				newLine, newPos := r.applyCompletion(line, pos, completions[0])
 				line = newLine
 				pos = newPos
-				r.redraw(line, pos)
+				r.refresh(line, pos)
 			} else if len(completions) > 1 {
 				// Multiple completions - show them
 				fmt.Print("\r\n")
@@ -182,7 +267,7 @@ func (r *Readline) ReadLine() (string, error) {
 				}
 				fmt.Print("\r\n")
 				fmt.Print(r.prompt)
-				r.redraw(line, pos)
+				r.refresh(line, pos)
 			}
 
 		case keyEscape:
@@ -198,7 +283,7 @@ func (r *Readline) ReadLine() (string, error) {
 						r.historyIdx--
 						line = []rune(r.history[r.historyIdx])
 						pos = len(line)
-						r.redraw(line, pos)
+						r.refresh(line, pos)
 					}
 
 				case 'B': // Down arrow - history next
@@ -210,45 +295,56 @@ func (r *Readline) ReadLine() (string, error) {
 							line = []rune(r.history[r.historyIdx])
 						}
 						pos = len(line)
-						r.redraw(line, pos)
+						r.refresh(line, pos)
 					}
 
-				case 'C': // Right arrow
+				case 'C': // Right arrow / accept autosuggestion at end of line
 					if pos < len(line) {
 						pos++
-						fmt.Print("\033[C")
+						r.refresh(line, pos)
+					} else if nl, np, ok := r.tryAcceptSuggestion(line, pos); ok {
+						line, pos = nl, np
+						r.refresh(line, pos)
 					}
 
 				case 'D': // Left arrow
 					if pos > 0 {
 						pos--
-						fmt.Print("\033[D")
+						r.refresh(line, pos)
 					}
 
 				case 'H': // Home
 					pos = 0
-					r.redraw(line, pos)
+					r.refresh(line, pos)
 
-				case 'F': // End
-					pos = len(line)
-					r.redraw(line, pos)
+				case 'F': // End / accept autosuggestion
+					if nl, np, ok := r.tryAcceptSuggestion(line, pos); ok {
+						line, pos = nl, np
+					} else {
+						pos = len(line)
+					}
+					r.refresh(line, pos)
 
 				case '3': // Delete key (followed by ~)
 					os.Stdin.Read(buf[:1]) // consume ~
 					if pos < len(line) {
 						line = append(line[:pos], line[pos+1:]...)
-						r.redraw(line, pos)
+						r.refresh(line, pos)
 					}
 
 				case '1': // Home (alternate)
 					os.Stdin.Read(buf[:1]) // consume ~
 					pos = 0
-					r.redraw(line, pos)
+					r.refresh(line, pos)
 
-				case '4': // End (alternate)
+				case '4': // End (alternate) / accept autosuggestion
 					os.Stdin.Read(buf[:1]) // consume ~
-					pos = len(line)
-					r.redraw(line, pos)
+					if nl, np, ok := r.tryAcceptSuggestion(line, pos); ok {
+						line, pos = nl, np
+					} else {
+						pos = len(line)
+					}
+					r.refresh(line, pos)
 				}
 			}
 
@@ -259,25 +355,42 @@ func (r *Readline) ReadLine() (string, error) {
 				ch := rune(buf[0])
 				line = append(line[:pos], append([]rune{ch}, line[pos:]...)...)
 				pos++
-				r.redraw(line, pos)
+				r.refresh(line, pos)
 			}
 		}
 	}
 }
 
-// redraw clears the line and redraws it with cursor at pos
-func (r *Readline) redraw(line []rune, pos int) {
-	// Move to beginning of line
+// refresh redraws the line, showing a dim autosuggestion from history when the
+// cursor is at the end of a non-empty line.
+func (r *Readline) refresh(line []rune, pos int) {
+	suggestion := ""
+	if pos == len(line) {
+		suggestion = r.suggestionFor(string(line))
+	}
+	r.draw(line, pos, suggestion)
+}
+
+// draw clears the current line and redraws the prompt, the line, and the dim
+// tail of an optional autosuggestion, leaving the cursor at pos.
+func (r *Readline) draw(line []rune, pos int, suggestion string) {
+	// Move to beginning of line and clear it.
 	fmt.Print("\r")
-	// Clear entire line
 	fmt.Print("\033[K")
-	// Print prompt and line
 	fmt.Print(r.prompt)
 	fmt.Print(string(line))
-	// Move cursor to correct position
-	if pos < len(line) {
-		// Move cursor back from end to pos
-		fmt.Printf("\033[%dD", len(line)-pos)
+
+	// Draw the part of the suggestion beyond what's already typed, dimmed.
+	var tail []rune
+	if suggestion != "" && len(suggestion) > len(line) {
+		tail = []rune(suggestion)[len(line):]
+		fmt.Print(ansi.BrightBlk + string(tail) + ansi.Reset)
+	}
+
+	// Move the cursor back from the end of everything drawn to pos.
+	end := len(line) + len(tail)
+	if end > pos {
+		fmt.Printf("\033[%dD", end-pos)
 	}
 }
 

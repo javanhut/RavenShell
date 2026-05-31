@@ -455,7 +455,9 @@ func TestPathWithIdentifier(t *testing.T) {
 	testPath(t, cmd.Arguments[0], "foo/bar/baz")
 }
 
-func TestIdentifierAsExpression(t *testing.T) {
+func TestBareWordIsExternalCommand(t *testing.T) {
+	// A bare identifier at the start of a statement is run as an external
+	// command (e.g. typing `git` or `somefile` at the prompt).
 	input := "somefile"
 	l := lexer.NewLexer(input)
 	p := New(l)
@@ -463,12 +465,35 @@ func TestIdentifierAsExpression(t *testing.T) {
 	checkParserErrors(t, p)
 
 	stmt := program.Statements[0].(*ast.ExpressionStatement)
-	ident, ok := stmt.Expression.(*ast.Identifier)
+	cmd, ok := stmt.Expression.(*ast.Command)
 	if !ok {
-		t.Fatalf("stmt.Expression is not Identifier. got=%T", stmt.Expression)
+		t.Fatalf("stmt.Expression is not Command. got=%T", stmt.Expression)
 	}
 
-	if ident.Value != "somefile" {
+	if cmd.Type != ast.CMD_EXTERNAL {
+		t.Errorf("command type wrong. got=%s, want=%s", cmd.Type, ast.CMD_EXTERNAL)
+	}
+	if cmd.Name != "somefile" {
+		t.Errorf("command name wrong. got=%s", cmd.Name)
+	}
+}
+
+func TestIdentifierAsValue(t *testing.T) {
+	// An identifier used as a value (not in command position) stays an
+	// Identifier, e.g. the right-hand side of an assignment.
+	input := "x = somevar"
+	l := lexer.NewLexer(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	stmt := program.Statements[0].(*ast.AssignmentStatement)
+	ident, ok := stmt.Value.(*ast.Identifier)
+	if !ok {
+		t.Fatalf("stmt.Value is not Identifier. got=%T", stmt.Value)
+	}
+
+	if ident.Value != "somevar" {
 		t.Errorf("identifier value wrong. got=%s", ident.Value)
 	}
 }
@@ -515,6 +540,71 @@ func testCommand(t *testing.T, exp ast.Expression, expectedType ast.CommandType)
 	}
 	if cmd.Type != expectedType {
 		t.Errorf("cmd.Type not %s. got=%s", expectedType, cmd.Type)
+	}
+}
+
+func TestExternalCommandWithFlags(t *testing.T) {
+	input := "git commit -m message"
+	l := lexer.NewLexer(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	stmt := program.Statements[0].(*ast.ExpressionStatement)
+	cmd, ok := stmt.Expression.(*ast.Command)
+	if !ok {
+		t.Fatalf("expression is not Command. got=%T", stmt.Expression)
+	}
+	if cmd.Type != ast.CMD_EXTERNAL || cmd.Name != "git" {
+		t.Fatalf("got command {%s %s}, want external git", cmd.Type, cmd.Name)
+	}
+	if len(cmd.Arguments) != 3 {
+		t.Fatalf("wrong arg count. got=%d, want 3 (%s)", len(cmd.Arguments), cmd.String())
+	}
+	// The flag should be preserved verbatim.
+	if cmd.Arguments[1].String() != `"-m"` {
+		t.Errorf("flag arg = %s, want \"-m\"", cmd.Arguments[1].String())
+	}
+}
+
+func TestNewlineSeparatesCommands(t *testing.T) {
+	// A newline must end the first command's argument list so the second line
+	// is parsed as its own command rather than being absorbed as an argument.
+	input := "print x\ngit status"
+	l := lexer.NewLexer(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 2 {
+		t.Fatalf("got %d statements, want 2", len(program.Statements))
+	}
+	cmd := program.Statements[1].(*ast.ExpressionStatement).Expression.(*ast.Command)
+	if cmd.Type != ast.CMD_EXTERNAL || cmd.Name != "git" {
+		t.Errorf("second statement = {%s %s}, want external git", cmd.Type, cmd.Name)
+	}
+}
+
+func TestPipeRightSideIsCommand(t *testing.T) {
+	// The right side of a pipe is in command position, so `wc` is an external
+	// command, not a bare identifier value.
+	input := `print "hi" | wc -l`
+	l := lexer.NewLexer(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	stmt := program.Statements[0].(*ast.ExpressionStatement)
+	pipe, ok := stmt.Expression.(*ast.PipeExpression)
+	if !ok {
+		t.Fatalf("expression is not PipeExpression. got=%T", stmt.Expression)
+	}
+	right, ok := pipe.Right.(*ast.Command)
+	if !ok {
+		t.Fatalf("pipe right is not Command. got=%T", pipe.Right)
+	}
+	if right.Type != ast.CMD_EXTERNAL || right.Name != "wc" {
+		t.Errorf("pipe right = {%s %s}, want external wc", right.Type, right.Name)
 	}
 }
 

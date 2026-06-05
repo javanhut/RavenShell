@@ -287,11 +287,87 @@ func TestAvailableCommandsIncludesFunctionsAndExecutables(t *testing.T) {
 	}
 }
 
+func TestStringInterpolation(t *testing.T) {
+	_, out := run(t, `name = "raven"
+print "hi $name and ${name}!"`)
+	if strings.TrimSpace(out) != "hi raven and raven!" {
+		t.Errorf("output = %q, want %q", out, "hi raven and raven!")
+	}
+}
+
+func TestSingleQuotesNotInterpolated(t *testing.T) {
+	e, _ := run(t, `name = "raven"
+s = '$name'`)
+	if got := e.vars["s"]; got != "$name" {
+		t.Errorf("s = %q, want literal $name", got)
+	}
+}
+
+func TestSemicolonSeparator(t *testing.T) {
+	e, _ := run(t, `a = 1 ; b = 2 ; c = 3`)
+	if e.vars["a"] != int64(1) || e.vars["b"] != int64(2) || e.vars["c"] != int64(3) {
+		t.Errorf("got a=%v b=%v c=%v", e.vars["a"], e.vars["b"], e.vars["c"])
+	}
+}
+
+func TestLogicalAndShortCircuits(t *testing.T) {
+	// A failing command (status != 0) short-circuits &&.
+	_, out := run(t, `git definitely-not-a-subcommand 2> /dev/null && print "ran" || print "skipped"`)
+	if strings.TrimSpace(out) != "skipped" {
+		t.Errorf("output = %q, want skipped", out)
+	}
+}
+
+func TestGlobReturnsArray(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), nil, 0644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), nil, 0644)
+	os.WriteFile(filepath.Join(dir, "c.log"), nil, 0644)
+
+	e := New()
+	e.cwd = dir
+	matches, err := e.builtinGlob([]Value{"*.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arr, ok := matches.([]Value)
+	if !ok || len(arr) != 2 {
+		t.Fatalf("glob(*.txt) = %v, want 2 matches", matches)
+	}
+}
+
+func TestParseSignal(t *testing.T) {
+	cases := map[string]int{"TERM": 15, "SIGKILL": 9, "9": 9, "hup": 1}
+	for in, want := range cases {
+		sig, err := parseSignal(in)
+		if err != nil || int(sig) != want {
+			t.Errorf("parseSignal(%q) = %v, %v; want %d", in, int(sig), err, want)
+		}
+	}
+	if _, err := parseSignal("NOPE"); err == nil {
+		t.Error("expected error for unknown signal")
+	}
+}
+
+func TestListProcessesNonEmpty(t *testing.T) {
+	procs, err := listProcesses()
+	if err != nil {
+		t.Skipf("ps unavailable: %v", err)
+	}
+	if len(procs) == 0 {
+		t.Error("expected at least one process")
+	}
+}
+
 func TestExternalCommandNotFound(t *testing.T) {
+	// Like a real shell, a missing command sets status 127 and does not abort.
 	e := New()
 	_, err := e.execExternal("definitely_not_a_real_command_xyz", nil)
-	if err == nil || !strings.Contains(err.Error(), "command not found") {
-		t.Errorf("expected command-not-found error, got %v", err)
+	if err != nil {
+		t.Errorf("expected no fatal error, got %v", err)
+	}
+	if e.lastStatus != 127 {
+		t.Errorf("expected lastStatus 127, got %d", e.lastStatus)
 	}
 }
 

@@ -151,10 +151,36 @@ Use arrow keys to navigate through previously entered commands:
 
 - **Up Arrow**: Previous command
 - **Down Arrow**: Next command
+- **Ctrl+R**: Reverse incremental search — start typing to find a matching past
+  command, press `Ctrl+R` again for older matches, `Enter` to run it, or `Esc`
+  to cancel.
 
 History is **persistent**: it is saved to `~/.raven_history` and restored across
-sessions, so suggestions and arrow-key recall work for commands from previous
-runs too.
+sessions, so suggestions and recall work for commands from previous runs too.
+
+### Multi-line Input
+
+When you type a line with an open `{`, `(`, or `[` (for example the start of a
+loop, conditional, or function), the prompt switches to a `…` continuation
+prompt and keeps reading until everything is balanced, then runs it as one
+unit:
+
+```
+~/projects ❯ for i in range(3) {
+…     print i
+… }
+0
+1
+2
+```
+
+Press `Ctrl+C` at any point to discard the partially-entered block.
+
+### Interrupting Commands
+
+Press `Ctrl+C` to stop a running command (such as a long-running external
+program) or a runaway loop. The command is interrupted but the shell itself
+keeps running.
 
 ## Keyboard Shortcuts
 
@@ -166,7 +192,8 @@ runs too.
 | `Ctrl+K` | Clear line after cursor |
 | `Ctrl+W` | Delete word before cursor |
 | `Ctrl+L` | Clear screen |
-| `Ctrl+C` | Cancel current input |
+| `Ctrl+R` | Reverse incremental history search |
+| `Ctrl+C` | Cancel current input, or interrupt a running command/loop |
 | `Ctrl+D` | Exit (on empty line) / Delete character |
 | `Left Arrow` | Move cursor left |
 | `Up Arrow` | Previous history entry |
@@ -316,6 +343,37 @@ print "a b c" | wc -w       # external programs work in pipes
 
 Use `print` for the shell's own text output; bare words are for invoking
 programs. Register extra search directories with `raven-add path`.
+
+You can chain commands by exit status and run them in the background:
+
+```rsh
+git pull && make            # make only if pull succeeds
+test -f x || print "no x"   # print only if the test fails
+build ; deploy              # run one after the other
+sleep 60 &                  # run in the background
+print $?                    # exit status of the last command
+```
+
+## Managing Processes
+
+RavenShell has built-in, ergonomic process tools — no `ps aux | grep | awk`
+pipelines required:
+
+```rsh
+ps                  # list all processes
+ps chrome           # filter by name
+
+kill 1234           # send SIGTERM to a pid
+kill 1234 KILL      # send a named signal (or a number)
+kill %1             # kill background job 1
+
+killall node        # signal every process matching "node"
+killall chrome KILL
+
+sleep 60 &          # start a background job  -> [1] 12345
+jobs                # list background jobs
+kill %1             # stop it
+```
 
 ## Environment Variables
 

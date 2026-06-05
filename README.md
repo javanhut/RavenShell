@@ -14,8 +14,12 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 - **Go-like Syntax** - Variables, arrays, loops, and conditionals with familiar syntax
 - **Functions** - Define reusable functions with parameters, return values, and recursion (`fn name(args) { ... }`)
 - **Rich Control Flow** - `for`, `while`, `if`/`else if`/`else`, plus `break` and `continue`
-- **Built-in Helpers** - String/collection functions: `len`, `split`, `join`, `contains`, `upper`, `lower`, `trim`, `replace`
-- **Environment & Substitution** - `export`/`env` for environment variables and `$(command)` substitution
+- **Command Sequencing** - `;` separators, `&&`/`||` short-circuit chaining, and `$?` exit status
+- **Multi-line Editing** - Type loops, conditionals, and functions across lines with a continuation prompt
+- **Interruptible** - `Ctrl-C` stops a running command or loop without killing the shell; `Ctrl-R` searches history
+- **Process Management** - `ps`, `kill`, `killall`, background jobs (`&`), and `jobs`
+- **Built-in Helpers** - String/collection functions: `len`, `split`, `join`, `contains`, `upper`, `lower`, `trim`, `replace`, `glob`
+- **Environment & Substitution** - `export`/`env`, `$(command)` substitution, and `$VAR` interpolation in double quotes
 - **Built-in Commands** - File system operations (ls, cd, mkdir, rm, etc.)
 - **External Commands** - Run any program on your `PATH` (git, python, cat, ...) with flag support (`-l`, `--all`)
 - **Pipes & Redirection** - Chain commands with `|` and redirect with `>`, `>>`, `<`
@@ -139,11 +143,28 @@ print join(parts, "-")
 print upper("ravenshell")
 print contains(parts, "b")
 
-# Environment variables and command substitution
+# Environment variables, interpolation, and command substitution
 export PROJECT RavenShell
-print $PROJECT
+print "project is $PROJECT"      # $VAR expands inside double quotes
 here = $(cwd)
 print here
+
+# Command sequencing and exit status
+mkdir build ; cd build           # ; separates commands
+git pull && make                 # run make only if git pull succeeds
+test -f config || print "missing config"
+print $?                         # exit status of the last command
+
+# Globbing (modern, unambiguous): glob() + array splatting
+for f in glob("*.txt") { print f }
+rm glob("*.tmp")
+
+# Process management
+ps chrome                        # list processes matching "chrome"
+sleep 60 &                       # run in the background
+jobs                             # list background jobs
+kill %1                          # kill background job 1
+killall node KILL                # signal all matching processes
 
 # Pipes and redirection
 ls | print

@@ -82,12 +82,34 @@ func (l *Lexer) scanToken() token.Token {
 
 	switch ch {
 	case '|':
+		if l.peekNext() == '|' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.OR, Literal: l.input[start:l.pos]}
+		}
 		return token.Token{Type: token.PIPE, Literal: string(l.advance())}
+	case ';':
+		return token.Token{Type: token.SEMICOLON, Literal: string(l.advance())}
+	case '&':
+		if l.peekNext() == '&' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.AND, Literal: l.input[start:l.pos]}
+		}
+		return token.Token{Type: token.AMP, Literal: string(l.advance())}
 	case '.':
 		return token.Token{Type: token.FULLSTOP, Literal: string(l.advance())}
 	case '~':
 		return token.Token{Type: token.TILDE, Literal: string(l.advance())}
 	case '$':
+		if l.peekNext() == '?' {
+			start := l.pos
+			l.advance()
+			l.advance()
+			return token.Token{Type: token.LASTSTATUS, Literal: l.input[start:l.pos]}
+		}
 		return token.Token{Type: token.DOLLAR, Literal: string(l.advance())}
 	case '/':
 		return token.Token{Type: token.FSLASH, Literal: string(l.advance())}
@@ -124,6 +146,16 @@ func (l *Lexer) scanToken() token.Token {
 	case '*':
 		return token.Token{Type: token.ASTERISK, Literal: string(l.advance())}
 	case '%':
+		// "%1" (no space) is a job reference used by kill/jobs; "%" with spaces
+		// around it is the modulo operator.
+		if unicode.IsDigit(rune(l.peekNext())) {
+			start := l.pos
+			l.advance() // consume '%'
+			for unicode.IsDigit(rune(l.peek())) {
+				l.advance()
+			}
+			return token.Token{Type: token.IDENT, Literal: l.input[start:l.pos]}
+		}
 		return token.Token{Type: token.PERCENT, Literal: string(l.advance())}
 	case '=':
 		if l.peekNext() == '=' {
@@ -213,7 +245,8 @@ func (l *Lexer) scanToken() token.Token {
 			// Optional: Handle unclosed string error here
 			return token.Token{Type: token.ILLEGAL, Literal: literal}
 		}
-		return token.Token{Type: token.STRING, Literal: literal}
+		// Single-quoted strings are literal (not interpolated).
+		return token.Token{Type: token.STRING, Literal: literal, SingleQuoted: true}
 	case 0:
 		return token.Token{Type: token.EOF, Literal: ""}
 	}

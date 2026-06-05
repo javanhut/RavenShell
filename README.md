@@ -21,6 +21,8 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 - **Built-in Helpers** - String/collection functions: `len`, `split`, `join`, `contains`, `upper`, `lower`, `trim`, `replace`, `glob`
 - **Environment & Substitution** - `export`/`env`, `$(command)` substitution, and `$VAR` interpolation in double quotes
 - **Built-in Commands** - File system operations (ls, cd, mkdir, rm, etc.)
+- **Human-Readable Aliases** - Natural-language names for common actions: `whereami`/`wai` (cwd), `read`/`view` (show a file), `remove`/`delete` (rm), `makefile`/`newfile`/`touch` (mkfile), `makedir` (mkdir)
+- **Built-in Help** - `raven-help` lists every built-in; `raven-help <command>` shows usage and aliases
 - **External Commands** - Run any program on your `PATH` (git, python, cat, ...) with flag support (`-l`, `--all`)
 - **Pipes & Redirection** - Chain commands with `|` and redirect with `>`, `>>`, `<`
 - **Configuration** - Customize startup behavior with `.ravenrc`
@@ -97,6 +99,14 @@ Then log out and back in. (To do it manually: add the binary's full path to
 ls
 cd ~/Documents
 mkdir new_folder
+
+# Human-readable command names (aliases of the classic ones)
+whereami                 # like cwd / pwd  (also: wai)
+makefile notes.txt       # like mkfile / touch  (also: newfile, touch)
+read notes.txt           # like show / cat  (also: view)
+remove notes.txt         # like rm  (also: delete)
+rmdir old_dir/ --force   # remove a non-empty directory (-f also works)
+raven-help               # list all built-ins; `raven-help read` for details
 
 # Variables and printing
 name = "RavenShell"

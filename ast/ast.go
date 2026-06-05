@@ -175,6 +175,7 @@ const (
 	CMD_EXPORT     CommandType = "export"
 	CMD_ENV        CommandType = "env"
 	CMD_RAVENADD   CommandType = "raven-add"
+	CMD_RAVENHELP  CommandType = "raven-help"
 	CMD_PS         CommandType = "ps"
 	CMD_KILL       CommandType = "kill"
 	CMD_KILLALL    CommandType = "killall"

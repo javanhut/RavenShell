@@ -4,6 +4,20 @@ This document provides a complete reference for all built-in commands in RavenSh
 
 ## File System Commands
 
+Many commands have human-readable aliases so the same action can be written the
+way that reads most naturally. Aliases behave identically to the canonical
+command.
+
+| Canonical | Aliases | Action |
+|-----------|---------|--------|
+| `cwd`     | `whereami`, `wai` | Print the current directory |
+| `show`    | `read`, `view` | Print a file's contents |
+| `mkfile`  | `makefile`, `newfile`, `touch` | Create empty files |
+| `mkdir`   | `makedir` | Create directories |
+| `rm`      | `remove`, `delete` | Remove files or directories |
+
+Run `raven-help` to list every built-in, or `raven-help <command>` for details.
+
 ### ls - List Directory Contents
 
 Lists files and directories in the specified location.
@@ -58,6 +72,8 @@ cd /tmp             # Go to /tmp
 
 Prints the current working directory.
 
+**Aliases:** `whereami`, `wai`
+
 **Syntax:**
 ```
 cwd
@@ -68,6 +84,7 @@ cwd
 **Example:**
 ```rsh
 cwd
+whereami            # same thing, reads more naturally
 # Output: /home/user/projects
 ```
 
@@ -75,7 +92,9 @@ cwd
 
 ### mkdir - Make Directory
 
-Creates one or more directories.
+Creates one or more directories (including any missing parent directories).
+
+**Aliases:** `makedir`
 
 **Syntax:**
 ```
@@ -98,22 +117,29 @@ mkdir ~/projects/new_project
 
 ### rmdir - Remove Directory
 
-Removes empty directories.
+Removes directories. By default only empty directories are removed (the safe
+choice); pass `-f` / `--force` to remove a directory and everything inside it.
 
 **Syntax:**
 ```
-rmdir path [path...]
+rmdir [-f|--force] path [path...]
 ```
 
 **Arguments:**
-- `path`: One or more empty directory paths to remove.
+- `path`: One or more directory paths to remove.
 
-**Notes:** Directories must be empty. Use `rm` for non-empty directories.
+**Flags:**
+- `-f`, `--force`: Remove non-empty directories recursively (like `rm`).
+
+**Notes:** Without `--force`, removing a non-empty directory fails with a hint
+to use `--force`.
 
 **Examples:**
 ```rsh
-rmdir empty_folder
+rmdir empty_folder            # only works if empty
 rmdir dir1 dir2
+rmdir project/ --force        # remove a non-empty directory
+rmdir build -f                # short flag form
 ```
 
 ---
@@ -121,6 +147,8 @@ rmdir dir1 dir2
 ### rm - Remove
 
 Removes files or directories (including contents).
+
+**Aliases:** `remove`, `delete`
 
 **Syntax:**
 ```
@@ -145,6 +173,8 @@ rm old_folder
 
 Creates empty files.
 
+**Aliases:** `makefile`, `newfile`, `touch`
+
 **Syntax:**
 ```
 mkfile path [path...]
@@ -164,7 +194,9 @@ mkfile ~/notes.txt
 
 ### show - Show File Contents
 
-Displays the contents of one or more files.
+Displays the contents of one or more files (like `cat`).
+
+**Aliases:** `read`, `view`
 
 **Syntax:**
 ```
@@ -177,8 +209,9 @@ show path [path...]
 **Examples:**
 ```rsh
 show file.txt
+read config.txt           # alias, reads naturally
+view ~/notes.txt          # alias
 show file1.txt file2.txt
-show ~/config.txt
 ```
 
 ---
@@ -348,6 +381,30 @@ raven-add path              # list registered search directories
 raven-add path ~/scripts    # register ~/scripts
 raven-add path /opt/tools/bin
 raven-add path              # list current search paths
+```
+
+---
+
+### raven-help - Built-in Command Help
+
+Lists all built-in commands grouped by category, or shows detailed help for a
+single command. Command names passed to it may be aliases (e.g. `read`), which
+resolve to their canonical command.
+
+**Aliases:** `help`
+
+**Syntax:**
+```
+raven-help                  # list every built-in command
+raven-help <command>        # show usage, summary, and aliases for one command
+```
+
+**Examples:**
+```rsh
+raven-help                  # overview of all commands
+help                        # same thing
+raven-help rmdir            # details for rmdir, including --force
+help read                   # resolves to the `show` command
 ```
 
 ---

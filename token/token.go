@@ -45,6 +45,7 @@ const (
 	EXPORT     TokenType = "EXPORT"
 	ENV        TokenType = "ENV"
 	RAVENADD   TokenType = "RAVENADD"
+	RAVENHELP  TokenType = "RAVENHELP"
 	PS         TokenType = "PS"
 	KILL       TokenType = "KILL"
 	KILLALL    TokenType = "KILLALL"
@@ -100,34 +101,46 @@ const (
 )
 
 var TokenMap = map[string]TokenType{
-	"ls":        LIST,
-	"rm":        REMOVE,
-	"mkdir":     MAKEDIR,
-	"rmdir":     REMOVEDIR,
-	"cd":        CHANGEDIR,
-	"cwd":       CURRENTDIR,
-	"whoami":    WHOAMI,
-	"mkfile":    MAKEFILE,
-	"output":    OUTPUT,
-	"print":     PRINT,
-	"show":      SHOW,
-	"clear":     CLEAR,
-	"export":    EXPORT,
-	"env":       ENV,
-	"raven-add": RAVENADD,
-	"ps":        PS,
-	"kill":      KILL,
-	"killall":   KILLALL,
-	"jobs":      JOBS,
-	"for":       FOR,
-	"in":        IN,
-	"if":        IF,
-	"else":      ELSE,
-	"range":     RANGE,
-	"append":    APPEND,
-	"while":     WHILE,
-	"break":     BREAK,
-	"continue":  CONTINUE,
-	"fn":        FN,
-	"return":    RETURN,
+	"ls":         LIST,
+	"rm":         REMOVE,
+	"remove":     REMOVE, // human-readable alias for rm
+	"delete":     REMOVE, // human-readable alias for rm
+	"mkdir":      MAKEDIR,
+	"makedir":    MAKEDIR, // human-readable alias for mkdir
+	"rmdir":      REMOVEDIR,
+	"cd":         CHANGEDIR,
+	"cwd":        CURRENTDIR,
+	"whereami":   CURRENTDIR, // human-readable alias for cwd
+	"wai":        CURRENTDIR, // short alias for whereami/cwd
+	"whoami":     WHOAMI,
+	"mkfile":     MAKEFILE,
+	"makefile":   MAKEFILE, // human-readable alias for mkfile
+	"newfile":    MAKEFILE, // human-readable alias for mkfile
+	"touch":      MAKEFILE, // familiar alias for mkfile
+	"output":     OUTPUT,
+	"print":      PRINT,
+	"show":       SHOW,
+	"read":       SHOW, // human-readable alias for show (read a file)
+	"view":       SHOW, // human-readable alias for show (view a file)
+	"clear":      CLEAR,
+	"export":     EXPORT,
+	"env":        ENV,
+	"raven-add":  RAVENADD,
+	"raven-help": RAVENHELP,
+	"help":       RAVENHELP, // short alias for raven-help
+	"ps":         PS,
+	"kill":       KILL,
+	"killall":    KILLALL,
+	"jobs":       JOBS,
+	"for":        FOR,
+	"in":         IN,
+	"if":         IF,
+	"else":       ELSE,
+	"range":      RANGE,
+	"append":     APPEND,
+	"while":      WHILE,
+	"break":      BREAK,
+	"continue":   CONTINUE,
+	"fn":         FN,
+	"return":     RETURN,
 }

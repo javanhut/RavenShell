@@ -448,6 +448,8 @@ func (e *Evaluator) dispatchCommand(cmd *ast.Command, args []string) (string, er
 		return e.execEnv()
 	case ast.CMD_RAVENADD:
 		return e.execRavenAdd(args)
+	case ast.CMD_RAVENHELP:
+		return e.execRavenHelp(args)
 	case ast.CMD_PS:
 		return e.execPs(args)
 	case ast.CMD_KILL:
@@ -679,6 +681,41 @@ func stripFlags(args []string) []string {
 	return out
 }
 
+// parseFlags splits args into positional operands and a set of flag names.
+// Long flags (--force, --max=5) land in the set by their name with any =value
+// stripped; bundled short flags (-rf) are split into individual letters ("r",
+// "f"). A lone "-" is treated as a positional operand, not a flag.
+func parseFlags(args []string) (positionals []string, flags map[string]bool) {
+	flags = make(map[string]bool)
+	for _, a := range args {
+		switch {
+		case a == "-" || !strings.HasPrefix(a, "-"):
+			positionals = append(positionals, a)
+		case strings.HasPrefix(a, "--"):
+			name := strings.TrimPrefix(a, "--")
+			if i := strings.IndexByte(name, '='); i >= 0 {
+				name = name[:i]
+			}
+			flags[name] = true
+		default:
+			for _, c := range a[1:] {
+				flags[string(c)] = true
+			}
+		}
+	}
+	return positionals, flags
+}
+
+// hasFlag reports whether any of the given flag names were present.
+func hasFlag(flags map[string]bool, names ...string) bool {
+	for _, n := range names {
+		if flags[n] {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *Evaluator) execList(args []string) (string, error) {
 	args = stripFlags(args)
 	dir := e.cwd
@@ -774,14 +811,25 @@ func (e *Evaluator) execMakeDir(args []string) (string, error) {
 }
 
 func (e *Evaluator) execRemoveDir(args []string) (string, error) {
-	args = stripFlags(args)
-	if len(args) == 0 {
+	paths, flags := parseFlags(args)
+	if len(paths) == 0 {
 		return "", fmt.Errorf("rmdir: missing operand")
 	}
+	force := hasFlag(flags, "f", "force")
 
-	for _, arg := range args {
+	for _, arg := range paths {
 		path := e.resolvePath(arg)
+		if force {
+			if err := os.RemoveAll(path); err != nil {
+				return "", fmt.Errorf("rmdir: %v", err)
+			}
+			continue
+		}
+		// Without --force, only empty directories are removed (the safe default).
 		if err := os.Remove(path); err != nil {
+			if strings.Contains(err.Error(), "not empty") {
+				return "", fmt.Errorf("rmdir: %v (use -f/--force to remove a non-empty directory)", err)
+			}
 			return "", fmt.Errorf("rmdir: %v", err)
 		}
 	}
@@ -1014,6 +1062,9 @@ func (e *Evaluator) AvailableCommands() []string {
 		set[name] = true
 	}
 	for name := range e.funcs {
+		set[name] = true
+	}
+	for _, name := range builtinCommandNames() {
 		set[name] = true
 	}
 

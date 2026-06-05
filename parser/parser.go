@@ -109,6 +109,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.EXPORT, p.parseCommandKeyword)
 	p.registerPrefix(token.ENV, p.parseCommandKeyword)
 	p.registerPrefix(token.RAVENADD, p.parseCommandKeyword)
+	p.registerPrefix(token.RAVENHELP, p.parseHelpCommand)
 	p.registerPrefix(token.PS, p.parseCommandKeyword)
 	p.registerPrefix(token.KILL, p.parseCommandKeyword)
 	p.registerPrefix(token.KILLALL, p.parseCommandKeyword)
@@ -384,6 +385,39 @@ func (p *Parser) parseExternalArguments() []ast.Expression {
 // parseCommandKeyword handles command keyword tokens (LIST, REMOVE, etc.)
 func (p *Parser) parseCommandKeyword() ast.Expression {
 	return p.parseCommand(p.curToken.Type)
+}
+
+// parseHelpCommand handles `raven-help [command]`. Its operands are command
+// names, which may themselves be command keywords (read, remove, rmdir, ...),
+// so it collects following same-line words by their literal rather than parsing
+// them as nested commands.
+func (p *Parser) parseHelpCommand() ast.Expression {
+	cmd := &ast.Command{
+		Token: p.curToken,
+		Name:  p.curToken.Literal,
+		Type:  ast.CMD_RAVENHELP,
+	}
+	for !p.peekToken.PrecededByNewline && p.peekIsCommandWord() {
+		p.nextToken()
+		cmd.Arguments = append(cmd.Arguments, &ast.Identifier{
+			Token: p.curToken,
+			Value: p.curToken.Literal,
+		})
+	}
+	return cmd
+}
+
+// peekIsCommandWord reports whether the peek token can name a command: a bare
+// identifier, or a keyword whose literal is the keyword itself (so command
+// keywords can be passed to raven-help by name).
+func (p *Parser) peekIsCommandWord() bool {
+	if p.peekTokenIs(token.IDENT) {
+		return true
+	}
+	if t, ok := token.TokenMap[p.peekToken.Literal]; ok && t == p.peekToken.Type {
+		return true
+	}
+	return false
 }
 
 func (p *Parser) parseCommand(cmdTokenType token.TokenType) ast.Expression {
@@ -707,6 +741,8 @@ func tokenTypeToCommandType(tt token.TokenType) ast.CommandType {
 		return ast.CMD_ENV
 	case token.RAVENADD:
 		return ast.CMD_RAVENADD
+	case token.RAVENHELP:
+		return ast.CMD_RAVENHELP
 	case token.PS:
 		return ast.CMD_PS
 	case token.KILL:

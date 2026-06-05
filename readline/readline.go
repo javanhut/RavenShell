@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"ravenshell/ansi"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -47,6 +48,7 @@ type Readline struct {
 	commands        []string        // Built-in commands for completion
 	cwd             func() string   // Function to get current working directory
 	commandProvider func() []string // Dynamic command names (functions, PATH executables)
+	cprDisabled     bool            // true once the terminal proves it ignores Cursor Position Reports
 }
 
 // New creates a new Readline instance
@@ -180,6 +182,10 @@ func (r *Readline) ReadLine() (string, error) {
 	pos := 0
 	r.historyIdx = len(r.history)
 	savedLine := ""
+
+	// If the previous command's output left the cursor mid-line (no trailing
+	// newline), move to a fresh line so the prompt always starts at column 1.
+	r.ensureFreshLine()
 
 	// Print prompt
 	fmt.Print(r.prompt)
@@ -385,6 +391,73 @@ func (r *Readline) ReadLine() (string, error) {
 			}
 		}
 	}
+}
+
+// ensureFreshLine guarantees the cursor is at the start of a line before the
+// prompt is drawn, so a previous command whose output lacked a trailing newline
+// does not leave the prompt appended to that output. It asks the terminal for
+// the cursor's column via a Cursor Position Report; a terminal that does not
+// answer is asked only once and then left alone. The terminal must already be
+// in raw mode (ReadLine puts it there) for the reply to be readable.
+func (r *Readline) ensureFreshLine() {
+	if r.cprDisabled {
+		return
+	}
+	col, ok := r.cursorColumn()
+	if !ok {
+		// The terminal didn't report a position; don't keep probing it.
+		r.cprDisabled = true
+		return
+	}
+	if col > 1 {
+		fmt.Print("\r\n")
+	}
+}
+
+// cursorColumn queries the terminal for the cursor's 1-based column using a
+// Cursor Position Report (CPR): it writes ESC [ 6 n and reads the terminal's
+// ESC [ row ; col R reply. It returns the column and true on success, or 0 and
+// false if the reply is missing or malformed.
+func (r *Readline) cursorColumn() (int, bool) {
+	if _, err := os.Stdout.WriteString("\x1b[6n"); err != nil {
+		return 0, false
+	}
+
+	// Read the reply byte by byte up to the terminating 'R'. The cap guards
+	// against a terminal that never sends 'R'.
+	var resp []byte
+	b := make([]byte, 1)
+	for i := 0; i < 16; i++ {
+		n, err := os.Stdin.Read(b)
+		if err != nil || n == 0 {
+			return 0, false
+		}
+		resp = append(resp, b[0])
+		if b[0] == 'R' {
+			break
+		}
+	}
+	return parseCursorColumn(string(resp))
+}
+
+// parseCursorColumn extracts the column from a Cursor Position Report of the
+// form "ESC [ row ; col R" (leading bytes before '[' are ignored). It returns
+// the 1-based column and true, or 0 and false if resp is not a valid report.
+func parseCursorColumn(resp string) (int, bool) {
+	i := strings.IndexByte(resp, '[')
+	j := strings.IndexByte(resp, 'R')
+	if i < 0 || j < 0 || j <= i {
+		return 0, false
+	}
+	parts := strings.Split(resp[i+1:j], ";")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	col, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || col < 1 {
+		return 0, false
+	}
+	return col, true
 }
 
 // reverseSearch runs an incremental reverse history search (Ctrl-R). It returns

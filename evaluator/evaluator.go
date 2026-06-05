@@ -716,6 +716,11 @@ func hasFlag(flags map[string]bool, names ...string) bool {
 	return false
 }
 
+// lsRowsPerColumn is how many entries fill one column of `ls` output before the
+// next column begins. Columns are added as needed (10, then 20, then 30, ...),
+// so a directory with 25 entries lists as columns of 10, 10, and 5.
+const lsRowsPerColumn = 10
+
 func (e *Evaluator) execList(args []string) (string, error) {
 	args = stripFlags(args)
 	dir := e.cwd
@@ -730,20 +735,83 @@ func (e *Evaluator) execList(args []string) (string, error) {
 
 	color := e.colorOutput()
 
-	// Plain (uncolored) listing is also returned so it works in pipes/captures.
+	// Build the visible names (with a trailing / for directories), their colored
+	// display forms, and the plain one-per-line listing that is returned for
+	// pipes and command substitution.
+	names := make([]string, len(entries))
+	display := make([]string, len(entries))
 	var plain bytes.Buffer
-	var display bytes.Buffer
-	for _, entry := range entries {
+	for i, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() {
 			name += "/"
 		}
+		names[i] = name
+		display[i] = e.colorizeEntry(entry, name, color)
 		plain.WriteString(name + "\n")
-		display.WriteString(e.colorizeEntry(entry, name, color) + "\n")
 	}
 
-	fmt.Fprint(e.stdout, display.String())
+	// To an interactive terminal, lay the entries out in columns. When the
+	// output is piped or captured (not a terminal), keep one entry per line so
+	// downstream tools and $(ls) can parse it.
+	if color {
+		fmt.Fprint(e.stdout, formatColumns(names, display, lsRowsPerColumn))
+	} else {
+		for _, d := range display {
+			fmt.Fprintln(e.stdout, d)
+		}
+	}
 	return plain.String(), nil
+}
+
+// formatColumns arranges entries into columns filled top-to-bottom, with
+// perCol entries per column (the last column may hold fewer). names holds the
+// visible text used for width/alignment; display holds the matching (possibly
+// colored) text that is actually written. Columns are sized to their widest
+// member and separated by two spaces.
+func formatColumns(names, display []string, perCol int) string {
+	n := len(names)
+	if n == 0 {
+		return ""
+	}
+
+	numCols := (n + perCol - 1) / perCol
+	rows := perCol
+	if numCols == 1 {
+		rows = n
+	}
+
+	// Width of each column = widest visible name it contains.
+	colWidth := make([]int, numCols)
+	for c := 0; c < numCols; c++ {
+		for r := 0; r < perCol; r++ {
+			idx := c*perCol + r
+			if idx >= n {
+				break
+			}
+			if w := utf8.RuneCountInString(names[idx]); w > colWidth[c] {
+				colWidth[c] = w
+			}
+		}
+	}
+
+	const gap = 2
+	var out bytes.Buffer
+	for r := 0; r < rows; r++ {
+		for c := 0; c < numCols; c++ {
+			idx := c*perCol + r
+			if idx >= n {
+				continue
+			}
+			out.WriteString(display[idx])
+			// Pad to the column width + gap, unless nothing follows on this row.
+			if next := (c+1)*perCol + r; next < n {
+				out.WriteString(strings.Repeat(" ", colWidth[c]-utf8.RuneCountInString(names[idx])+gap))
+			}
+		}
+		out.WriteByte('\n')
+	}
+	return out.String()
 }
 
 // colorizeEntry applies a color to a directory listing entry based on its

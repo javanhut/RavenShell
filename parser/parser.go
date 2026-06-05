@@ -487,14 +487,23 @@ func (p *Parser) isArgumentToken(tt token.TokenType) bool {
 	}
 }
 
-// isPathToken returns true if the token type can be part of a path
-func (p *Parser) isPathToken(tt token.TokenType) bool {
-	switch tt {
-	case token.IDENT, token.FULLSTOP, token.FSLASH:
+// isPathContinuation reports whether tok can extend a path it is glued to with
+// no intervening whitespace. Beyond identifiers, dots, and slashes, this also
+// covers integer segments (so v1.2.3.tgz stays whole) and reserved words (so
+// path segments may legitimately be named env, output, print, in, ...: e.g.
+// dir/output.go, .env.local, lib/print.txt). Without this, any path segment
+// that happens to be a keyword or a number would split the path.
+func (p *Parser) isPathContinuation(tok token.Token) bool {
+	switch tok.Type {
+	case token.IDENT, token.INTEGER, token.FULLSTOP, token.FSLASH:
 		return true
-	default:
-		return false
 	}
+	// A token whose literal maps back to its own type is a reserved word
+	// (ls, env, output, for, ...); treat it as plain path text here.
+	if t, ok := token.TokenMap[tok.Literal]; ok && t == tok.Type {
+		return true
+	}
+	return false
 }
 
 func (p *Parser) parseIntegerLiteral() ast.Expression {
@@ -525,28 +534,19 @@ func (p *Parser) parsePath() ast.Expression {
 	p.prefixCmdPos = false
 
 	path := &ast.PathExpression{Token: p.curToken}
-	var pathStr string
 
-	// Collect all path tokens
-	pathStr += p.curToken.Literal
-	lastWasExtension := false
-
-	// Continue while next token is part of a path
-	for p.isPathToken(p.peekToken.Type) {
-		// A space ends the path; the next token is a separate argument.
+	// Collect all path tokens. Path tokens (IDENT, '.', '/') that are adjacent
+	// with no intervening whitespace form a single path, so multi-dot names
+	// (archive.tar.gz), dotfiles (.gitignore), and dotfiles with extensions
+	// (.env.local) all stay intact. Whitespace is the only delimiter between
+	// separate path arguments.
+	pathStr := p.curToken.Literal
+	for p.isPathContinuation(p.peekToken) {
 		if p.peekToken.PrecededByWhitespace {
 			break
 		}
-		// After an extension (. + IDENT), only continue if next is FSLASH
-		if lastWasExtension && !p.peekTokenIs(token.FSLASH) {
-			break
-		}
-
 		p.nextToken()
 		pathStr += p.curToken.Literal
-
-		// Track if we just parsed an extension (FULLSTOP followed by IDENT)
-		lastWasExtension = p.curTokenIs(token.IDENT) && len(pathStr) > 1 && pathStr[len(pathStr)-len(p.curToken.Literal)-1] == '.'
 	}
 
 	path.Value = pathStr
@@ -558,28 +558,19 @@ func (p *Parser) parsePath() ast.Expression {
 	return path
 }
 
-// parsePathFromIdent parses a path that starts with an identifier (e.g., foo/bar, test.txt)
+// parsePathFromIdent parses a path that starts with an identifier (e.g.,
+// foo/bar, test.txt, archive.tar.gz). Adjacent path tokens with no whitespace
+// between them join into a single path; whitespace ends the path.
 func (p *Parser) parsePathFromIdent() ast.Expression {
 	path := &ast.PathExpression{Token: p.curToken}
 	pathStr := p.curToken.Literal
-	lastWasExtension := false
 
-	// Continue while next token is part of a path
-	for p.isPathToken(p.peekToken.Type) {
-		// A space ends the path; the next token is a separate argument.
+	for p.isPathContinuation(p.peekToken) {
 		if p.peekToken.PrecededByWhitespace {
 			break
 		}
-		// After an extension (. + IDENT), only continue if next is FSLASH
-		if lastWasExtension && !p.peekTokenIs(token.FSLASH) {
-			break
-		}
-
 		p.nextToken()
 		pathStr += p.curToken.Literal
-
-		// Track if we just parsed an extension (FULLSTOP followed by IDENT)
-		lastWasExtension = p.curTokenIs(token.IDENT) && len(pathStr) > 1 && pathStr[len(pathStr)-len(p.curToken.Literal)-1] == '.'
 	}
 
 	path.Value = pathStr

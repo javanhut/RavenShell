@@ -12,6 +12,7 @@ import (
 const (
 	_ int = iota
 	LOWEST
+	ANDOR       // &&, || (loosest binding command operators)
 	REDIRECT    // >, >>, <
 	PIPE        // |
 	EQUALS      // ==, !=
@@ -25,6 +26,8 @@ const (
 
 // Precedence table for infix operators
 var precedences = map[token.TokenType]int{
+	token.AND:      ANDOR,
+	token.OR:       ANDOR,
 	token.PIPE:     PIPE,
 	token.INTO:     REDIRECT,
 	token.OUT:      REDIRECT,
@@ -80,6 +83,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.INTEGER, p.parseIntegerLiteral)
 	p.registerPrefix(token.STRING, p.parseStringLiteral)
 	p.registerPrefix(token.FLAG, p.parseFlagLiteral)
+	p.registerPrefix(token.LASTSTATUS, p.parseLastStatus)
 	p.registerPrefix(token.DOLLAR, p.parseVariableReference)
 	p.registerPrefix(token.FULLSTOP, p.parsePath)
 	p.registerPrefix(token.FSLASH, p.parsePath)
@@ -105,6 +109,10 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.EXPORT, p.parseCommandKeyword)
 	p.registerPrefix(token.ENV, p.parseCommandKeyword)
 	p.registerPrefix(token.RAVENADD, p.parseCommandKeyword)
+	p.registerPrefix(token.PS, p.parseCommandKeyword)
+	p.registerPrefix(token.KILL, p.parseCommandKeyword)
+	p.registerPrefix(token.KILLALL, p.parseCommandKeyword)
+	p.registerPrefix(token.JOBS, p.parseCommandKeyword)
 
 	// Register infix parse functions
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
@@ -122,6 +130,8 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerInfix(token.LTE, p.parseInfixExpression)
 	p.registerInfix(token.GTE, p.parseInfixExpression)
 	p.registerInfix(token.LBRACKET, p.parseIndexExpression)
+	p.registerInfix(token.AND, p.parseLogicalExpression)
+	p.registerInfix(token.OR, p.parseLogicalExpression)
 
 	// Read two tokens to initialize curToken and peekToken
 	p.nextToken()
@@ -187,6 +197,11 @@ func (p *Parser) ParseProgram() *ast.Program {
 	program.Statements = []ast.Statement{}
 
 	for !p.curTokenIs(token.EOF) {
+		// ';' separates statements on a line.
+		if p.curTokenIs(token.SEMICOLON) {
+			p.nextToken()
+			continue
+		}
 		stmt := p.parseStatement()
 		if stmt != nil {
 			program.Statements = append(program.Statements, stmt)
@@ -230,7 +245,36 @@ func (p *Parser) parseExpressionStatement() *ast.ExpressionStatement {
 	// or path here is run as an external command.
 	p.cmdPos = true
 	stmt.Expression = p.parseExpression(LOWEST)
+
+	// A trailing '&' runs the command in the background.
+	if p.peekTokenIs(token.AMP) {
+		amp := p.peekToken
+		p.nextToken()
+		stmt.Expression = &ast.BackgroundExpression{Token: amp, Command: stmt.Expression}
+	}
+
 	return stmt
+}
+
+// parseLastStatus parses $? (the exit status of the last command).
+func (p *Parser) parseLastStatus() ast.Expression {
+	p.prefixCmdPos = false
+	return &ast.LastStatus{Token: p.curToken}
+}
+
+// parseLogicalExpression parses left && right or left || right.
+func (p *Parser) parseLogicalExpression(left ast.Expression) ast.Expression {
+	exp := &ast.LogicalExpression{
+		Token:    p.curToken,
+		Operator: p.curToken.Literal,
+		Left:     left,
+	}
+	precedence := p.curPrecedence()
+	p.nextToken()
+	// The right side is a command, like the right side of a pipe.
+	p.cmdPos = true
+	exp.Right = p.parseExpression(precedence)
+	return exp
 }
 
 // parseExpression is the core Pratt parser function
@@ -401,7 +445,8 @@ func (p *Parser) isNextAssignment() bool {
 // isArgumentToken returns true if the token type can be a command argument
 func (p *Parser) isArgumentToken(tt token.TokenType) bool {
 	switch tt {
-	case token.IDENT, token.STRING, token.INTEGER, token.DOLLAR, token.FULLSTOP, token.FSLASH, token.TILDE:
+	case token.IDENT, token.STRING, token.INTEGER, token.DOLLAR, token.LASTSTATUS,
+		token.FULLSTOP, token.FSLASH, token.TILDE, token.FLAG:
 		return true
 	default:
 		return false
@@ -433,7 +478,11 @@ func (p *Parser) parseIntegerLiteral() ast.Expression {
 }
 
 func (p *Parser) parseStringLiteral() ast.Expression {
-	return &ast.StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	return &ast.StringLiteral{
+		Token:       p.curToken,
+		Value:       p.curToken.Literal,
+		Interpolate: !p.curToken.SingleQuoted,
+	}
 }
 
 // parsePath parses a file path (./foo, ../bar, /absolute/path, etc.)
@@ -658,6 +707,14 @@ func tokenTypeToCommandType(tt token.TokenType) ast.CommandType {
 		return ast.CMD_ENV
 	case token.RAVENADD:
 		return ast.CMD_RAVENADD
+	case token.PS:
+		return ast.CMD_PS
+	case token.KILL:
+		return ast.CMD_KILL
+	case token.KILLALL:
+		return ast.CMD_KILLALL
+	case token.JOBS:
+		return ast.CMD_JOBS
 	default:
 		return ast.CMD_EXTERNAL
 	}
@@ -827,6 +884,11 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	p.nextToken()
 
 	for !p.curTokenIs(token.RBRACE) && !p.curTokenIs(token.EOF) {
+		// ';' separates statements within a block.
+		if p.curTokenIs(token.SEMICOLON) {
+			p.nextToken()
+			continue
+		}
 		stmt := p.parseStatement()
 		if stmt != nil {
 			block.Statements = append(block.Statements, stmt)

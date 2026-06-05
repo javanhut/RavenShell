@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"ravenshell/ansi"
 	"ravenshell/evaluator"
@@ -137,9 +139,44 @@ func runSource(eval *evaluator.Evaluator, source, label string) bool {
 	}
 
 	if err := eval.Eval(program); err != nil {
-		fmt.Println(colorize(ansi.Red, fmt.Sprintf("%serror: %s", prefix, err)))
+		if errors.Is(err, evaluator.ErrInterrupted) {
+			fmt.Println("^C")
+		} else {
+			fmt.Println(colorize(ansi.Red, fmt.Sprintf("%serror: %s", prefix, err)))
+		}
 	}
 	return true
+}
+
+// inputIncomplete reports whether src has unbalanced brackets or an unterminated
+// string, meaning the REPL should keep reading continuation lines.
+func inputIncomplete(src string) bool {
+	depth := 0
+	var inString byte // 0, '\'' or '"'
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if inString != 0 {
+			if c == inString {
+				inString = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			inString = c
+		case '#':
+			for i < len(src) && src[i] != '\n' {
+				i++
+			}
+		case '{', '(', '[':
+			depth++
+		case '}', ')', ']':
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return depth > 0 || inString != 0
 }
 
 // runScript executes a .rsh script file
@@ -203,25 +240,59 @@ func repl() {
 	// Offer user-defined functions and PATH executables as tab completions.
 	rl.SetCommandProvider(eval.AvailableCommands)
 
+	// Interrupt running commands/loops with Ctrl-C without killing the shell.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	go func() {
+		for range sigCh {
+			eval.Interrupt()
+		}
+	}()
+
+	contPrompt := colorize(ansi.BrightBlk, "… ")
+	var buf strings.Builder
+
 	for {
-		// Refresh the prompt so it reflects the current directory after cd.
-		rl.SetPrompt(makePrompt(eval.GetCwd()))
+		if buf.Len() > 0 {
+			rl.SetPrompt(contPrompt)
+		} else {
+			// Refresh the prompt so it reflects the current directory after cd.
+			rl.SetPrompt(makePrompt(eval.GetCwd()))
+		}
 
 		input, err := rl.ReadLine()
 		if err != nil {
-			// EOF or error
-			break
+			if errors.Is(err, readline.ErrInterrupt) {
+				// Ctrl-C: discard any partial multi-line input.
+				buf.Reset()
+				continue
+			}
+			break // EOF
 		}
 
-		if input == "exit" || input == "quit" {
+		// exit/quit only when not in the middle of a multi-line construct.
+		if buf.Len() == 0 && (input == "exit" || input == "quit") {
 			fmt.Println("Goodbye!")
 			break
 		}
 
-		if input == "" {
+		if buf.Len() > 0 {
+			buf.WriteByte('\n')
+		}
+		buf.WriteString(input)
+
+		src := buf.String()
+		if strings.TrimSpace(src) == "" {
+			buf.Reset()
+			continue
+		}
+		// Keep reading lines until brackets/quotes balance.
+		if inputIncomplete(src) {
 			continue
 		}
 
-		runSource(eval, input, "")
+		eval.ClearInterrupt()
+		runSource(eval, src, "")
+		buf.Reset()
 	}
 }

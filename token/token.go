@@ -5,6 +5,9 @@ type TokenType string
 type Token struct {
 	Type    TokenType
 	Literal string
+	// SingleQuoted is true for string tokens written with single quotes; such
+	// strings are not interpolated.
+	SingleQuoted bool
 	// PrecededByNewline is true when one or more newlines were skipped
 	// immediately before this token. The parser uses it to terminate a
 	// command's argument list at the end of a line.
@@ -32,7 +35,8 @@ const (
 	IDENT      TokenType = "IDENTIFER"
 	INTEGER    TokenType = "INTEGER"
 	STRING     TokenType = "STRING"
-	FLAG       TokenType = "FLAG" // command flag like -l, --all, --max=5
+	FLAG       TokenType = "FLAG"       // command flag like -l, --all, --max=5
+	LASTSTATUS TokenType = "LASTSTATUS" // $? - exit status of the last command
 	PIPE       TokenType = "PIPE"
 	DOLLAR     TokenType = "DOLLAR"
 	PRINT      TokenType = "PRINT"
@@ -41,6 +45,10 @@ const (
 	EXPORT     TokenType = "EXPORT"
 	ENV        TokenType = "ENV"
 	RAVENADD   TokenType = "RAVENADD"
+	PS         TokenType = "PS"
+	KILL       TokenType = "KILL"
+	KILLALL    TokenType = "KILLALL"
+	JOBS       TokenType = "JOBS"
 	GREATER    TokenType = "GREATER"
 	INTO       TokenType = "INTO"
 	LESS       TokenType = "LESS"
@@ -83,6 +91,12 @@ const (
 	GT       TokenType = "GT"       // > (for comparisons, different from GREATER for redirection)
 	LTE      TokenType = "LTE"      // <=
 	GTE      TokenType = "GTE"      // >=
+
+	// Command sequencing
+	SEMICOLON TokenType = "SEMICOLON" // ;
+	AND       TokenType = "AND"       // &&
+	OR        TokenType = "OR"        // ||
+	AMP       TokenType = "AMP"       // & (run in background)
 )
 
 var TokenMap = map[string]TokenType{
@@ -101,6 +115,10 @@ var TokenMap = map[string]TokenType{
 	"export":    EXPORT,
 	"env":       ENV,
 	"raven-add": RAVENADD,
+	"ps":        PS,
+	"kill":      KILL,
+	"killall":   KILLALL,
+	"jobs":      JOBS,
 	"for":       FOR,
 	"in":        IN,
 	"if":        IF,

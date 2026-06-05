@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -64,25 +67,52 @@ type Evaluator struct {
 	stdout      io.Writer                         // Standard output (for redirections)
 	stdin       io.Reader                         // Standard input (for redirections)
 
+	lastStatus int // exit status of the last command ($?)
+
+	jobs      []*job // background jobs
+	nextJobID int
+	jobsMu    sync.Mutex
+
+	interrupted int32 // set by Interrupt() (SIGINT); checked by loops
+
 	execCache      []string // cached executable names from search/system PATH
 	execCacheValid bool
 }
+
+// ErrInterrupted is returned when evaluation is interrupted by SIGINT (Ctrl-C).
+var ErrInterrupted = errors.New("interrupted")
 
 // New creates a new Evaluator
 func New() *Evaluator {
 	cwd, _ := os.Getwd()
 	global := make(map[string]Value)
 	e := &Evaluator{
-		cwd:    cwd,
-		env:    make(map[string]string),
-		vars:   global,
-		scopes: []map[string]Value{global},
-		funcs:  make(map[string]*ast.FunctionStatement),
-		stdout: os.Stdout,
-		stdin:  os.Stdin,
+		cwd:       cwd,
+		env:       make(map[string]string),
+		vars:      global,
+		scopes:    []map[string]Value{global},
+		funcs:     make(map[string]*ast.FunctionStatement),
+		stdout:    os.Stdout,
+		stdin:     os.Stdin,
+		nextJobID: 1,
 	}
 	e.loadSearchPaths()
 	return e
+}
+
+// Interrupt marks evaluation as interrupted (called from a SIGINT handler).
+// Running RavenShell loops will unwind with ErrInterrupted.
+func (e *Evaluator) Interrupt() {
+	atomic.StoreInt32(&e.interrupted, 1)
+}
+
+// ClearInterrupt resets the interrupt flag (called before each REPL line).
+func (e *Evaluator) ClearInterrupt() {
+	atomic.StoreInt32(&e.interrupted, 0)
+}
+
+func (e *Evaluator) checkInterrupt() bool {
+	return atomic.LoadInt32(&e.interrupted) == 1
 }
 
 // configPath returns the path to a RavenShell config file in the user's home
@@ -248,11 +278,20 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 	case *ast.PathExpression:
 		return e.resolvePath(node.Value), nil
 	case *ast.StringLiteral:
+		if node.Interpolate {
+			return e.interpolate(node.Value), nil
+		}
 		return node.Value, nil
 	case *ast.IntegerLiteral:
 		return node.Value, nil
 	case *ast.VariableReference:
 		return e.expandVariable(node.Name.Value), nil
+	case *ast.LastStatus:
+		return int64(e.lastStatus), nil
+	case *ast.LogicalExpression:
+		return e.evalLogical(node)
+	case *ast.BackgroundExpression:
+		return e.evalBackground(node)
 	case *ast.CommandSubstitution:
 		return e.evalCommandSubstitution(node)
 	case *ast.InfixExpression:
@@ -336,16 +375,47 @@ func (e *Evaluator) valueToBool(val Value) bool {
 }
 
 func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
-	// Evaluate arguments
-	args := make([]string, len(cmd.Arguments))
-	for i, arg := range cmd.Arguments {
-		val, err := e.evalExpression(arg)
-		if err != nil {
-			return "", err
-		}
-		args[i] = val
+	// Evaluate arguments (array-valued arguments are splatted into multiple args)
+	args, err := e.evalArgs(cmd.Arguments)
+	if err != nil {
+		return "", err
 	}
 
+	result, err := e.dispatchCommand(cmd, args)
+
+	// Track exit status for $?. External commands set their own status; other
+	// commands are 0 on success and 1 on error.
+	if cmd.Type != ast.CMD_EXTERNAL {
+		if err != nil {
+			e.lastStatus = 1
+		} else {
+			e.lastStatus = 0
+		}
+	}
+	return result, err
+}
+
+// evalArgs evaluates command argument expressions, splatting array values into
+// multiple string arguments (so glob(...) and arrays expand naturally).
+func (e *Evaluator) evalArgs(arguments []ast.Expression) ([]string, error) {
+	var args []string
+	for _, arg := range arguments {
+		val, err := e.evalExpressionValue(arg)
+		if err != nil {
+			return nil, err
+		}
+		if arr, ok := val.([]Value); ok {
+			for _, el := range arr {
+				args = append(args, e.valueToString(el))
+			}
+		} else {
+			args = append(args, e.valueToString(val))
+		}
+	}
+	return args, nil
+}
+
+func (e *Evaluator) dispatchCommand(cmd *ast.Command, args []string) (string, error) {
 	// Execute command based on type
 	switch cmd.Type {
 	case ast.CMD_LIST:
@@ -378,6 +448,14 @@ func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
 		return e.execEnv()
 	case ast.CMD_RAVENADD:
 		return e.execRavenAdd(args)
+	case ast.CMD_PS:
+		return e.execPs(args)
+	case ast.CMD_KILL:
+		return e.execKill(args)
+	case ast.CMD_KILLALL:
+		return e.execKillall(args)
+	case ast.CMD_JOBS:
+		return e.execJobs()
 	case ast.CMD_TILDE:
 		return e.execHome()
 	case ast.CMD_EXTERNAL:
@@ -400,7 +478,11 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 				return e.valueToString(val), nil
 			}
 		}
-		return "", fmt.Errorf("%s: command not found", name)
+		// Like a real shell, a missing command sets a non-zero status and
+		// reports to stderr, but does not abort the program.
+		fmt.Fprintf(os.Stderr, "%s: command not found\n", name)
+		e.lastStatus = 127
+		return "", nil
 	}
 
 	c := exec.Command(path, args...)
@@ -410,14 +492,26 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 	c.Stderr = os.Stderr
 	c.Env = e.buildEnv()
 
-	if err := c.Run(); err != nil {
-		// Surface the program's own exit status without a noisy Go wrapper.
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("%s: exited with status %d", name, exitErr.ExitCode())
+	err = c.Run()
+	e.lastStatus = exitStatus(err)
+	if err != nil {
+		if _, ok := err.(*exec.ExitError); !ok {
+			// A real run error (not just a non-zero exit) - report it.
+			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		}
-		return "", fmt.Errorf("%s: %v", name, err)
 	}
 	return "", nil
+}
+
+// exitStatus maps a command run error to a numeric exit status.
+func exitStatus(err error) int {
+	if err == nil {
+		return 0
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return exitErr.ExitCode()
+	}
+	return 1
 }
 
 // colorOutput reports whether the evaluator's stdout is an interactive
@@ -571,7 +665,22 @@ func (e *Evaluator) evalRedirection(redir *ast.RedirectionExpression) (string, e
 
 // Command implementations
 
+// stripFlags drops leading-dash flag arguments. Built-in file commands accept
+// flags like -p, -rf, or -la for muscle-memory compatibility but ignore them
+// (mkdir always creates parents, rm is always recursive, etc.).
+func stripFlags(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") && a != "-" {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 func (e *Evaluator) execList(args []string) (string, error) {
+	args = stripFlags(args)
 	dir := e.cwd
 	if len(args) > 0 {
 		dir = e.resolvePath(args[0])
@@ -620,6 +729,7 @@ func (e *Evaluator) colorizeEntry(entry os.DirEntry, name string, color bool) st
 }
 
 func (e *Evaluator) execChangeDir(args []string) (string, error) {
+	args = stripFlags(args)
 	if len(args) == 0 {
 		// Change to home directory
 		home, err := os.UserHomeDir()
@@ -649,6 +759,7 @@ func (e *Evaluator) execCurrentDir() (string, error) {
 }
 
 func (e *Evaluator) execMakeDir(args []string) (string, error) {
+	args = stripFlags(args)
 	if len(args) == 0 {
 		return "", fmt.Errorf("mkdir: missing operand")
 	}
@@ -663,6 +774,7 @@ func (e *Evaluator) execMakeDir(args []string) (string, error) {
 }
 
 func (e *Evaluator) execRemoveDir(args []string) (string, error) {
+	args = stripFlags(args)
 	if len(args) == 0 {
 		return "", fmt.Errorf("rmdir: missing operand")
 	}
@@ -677,6 +789,7 @@ func (e *Evaluator) execRemoveDir(args []string) (string, error) {
 }
 
 func (e *Evaluator) execRemove(args []string) (string, error) {
+	args = stripFlags(args)
 	if len(args) == 0 {
 		return "", fmt.Errorf("rm: missing operand")
 	}
@@ -691,6 +804,7 @@ func (e *Evaluator) execRemove(args []string) (string, error) {
 }
 
 func (e *Evaluator) execMakeFile(args []string) (string, error) {
+	args = stripFlags(args)
 	if len(args) == 0 {
 		return "", fmt.Errorf("mkfile: missing operand")
 	}
@@ -747,6 +861,7 @@ func (e *Evaluator) execOutput(args []string) (string, error) {
 }
 
 func (e *Evaluator) execShow(args []string) (string, error) {
+	args = stripFlags(args)
 	if len(args) == 0 {
 		return "", fmt.Errorf("show: missing file argument")
 	}
@@ -1035,6 +1150,9 @@ func (e *Evaluator) evalForStatement(stmt *ast.ForStatement) error {
 
 	// Iterate
 	for _, item := range items {
+		if e.checkInterrupt() {
+			return ErrInterrupted
+		}
 		e.setVar(stmt.Variable.Value, item)
 		if err := e.evalBlockStatement(stmt.Body); err != nil {
 			if sig, ok := asControl(err); ok {
@@ -1055,6 +1173,9 @@ func (e *Evaluator) evalForStatement(stmt *ast.ForStatement) error {
 // evalWhileStatement handles while loops: while cond { ... }
 func (e *Evaluator) evalWhileStatement(stmt *ast.WhileStatement) error {
 	for {
+		if e.checkInterrupt() {
+			return ErrInterrupted
+		}
 		cond, err := e.evalExpressionValue(stmt.Condition)
 		if err != nil {
 			return err
@@ -1216,6 +1337,8 @@ func (e *Evaluator) evalCallExpression(node *ast.CallExpression) (Value, error) 
 		return e.builtinStr1(args, "trim", strings.TrimSpace)
 	case "replace":
 		return e.builtinReplace(args)
+	case "glob":
+		return e.builtinGlob(args)
 	}
 
 	// User-defined function.
@@ -1312,6 +1435,112 @@ func (e *Evaluator) builtinReplace(args []Value) (Value, error) {
 	old := e.valueToString(args[1])
 	newStr := e.valueToString(args[2])
 	return strings.ReplaceAll(s, old, newStr), nil
+}
+
+// builtinGlob expands a shell glob pattern against the current directory and
+// returns a sorted array of matching paths (relative when the pattern is
+// relative). Returns an empty array when nothing matches.
+func (e *Evaluator) builtinGlob(args []Value) (Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("glob() takes exactly 1 argument")
+	}
+	pattern := e.valueToString(args[0])
+	relative := !filepath.IsAbs(pattern) && !strings.HasPrefix(pattern, "~")
+
+	matches, err := filepath.Glob(e.resolvePath(pattern))
+	if err != nil {
+		return nil, fmt.Errorf("glob: %v", err)
+	}
+
+	result := make([]Value, 0, len(matches))
+	for _, m := range matches {
+		if relative {
+			if rel, err := filepath.Rel(e.cwd, m); err == nil {
+				m = rel
+			}
+		}
+		result = append(result, m)
+	}
+	return result, nil
+}
+
+// interpolate expands $VAR, ${VAR}, and $? references inside a double-quoted
+// string. A literal dollar sign is written as $$.
+func (e *Evaluator) interpolate(s string) string {
+	var out strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '$' || i == len(s)-1 {
+			out.WriteByte(s[i])
+			continue
+		}
+		next := s[i+1]
+		switch {
+		case next == '$':
+			out.WriteByte('$')
+			i++
+		case next == '?':
+			out.WriteString(strconv.Itoa(e.lastStatus))
+			i++
+		case next == '{':
+			end := strings.IndexByte(s[i+2:], '}')
+			if end < 0 {
+				out.WriteByte('$') // unterminated - leave literal
+				continue
+			}
+			name := s[i+2 : i+2+end]
+			out.WriteString(e.lookupName(name))
+			i += 2 + end
+		case isNameStart(next):
+			j := i + 1
+			for j < len(s) && isNameChar(s[j]) {
+				j++
+			}
+			out.WriteString(e.lookupName(s[i+1 : j]))
+			i = j - 1
+		default:
+			out.WriteByte('$')
+		}
+	}
+	return out.String()
+}
+
+// lookupName resolves a name to its shell variable value, falling back to the
+// environment.
+func (e *Evaluator) lookupName(name string) string {
+	if val, ok := e.getVar(name); ok {
+		return e.valueToString(val)
+	}
+	return e.expandVariable(name)
+}
+
+func isNameStart(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func isNameChar(c byte) bool {
+	return isNameStart(c) || (c >= '0' && c <= '9')
+}
+
+// evalLogical evaluates && and || with short-circuiting based on exit status.
+func (e *Evaluator) evalLogical(node *ast.LogicalExpression) (Value, error) {
+	_, err := e.evalExpressionValue(node.Left)
+	if err != nil {
+		// Treat an evaluation error on the left as failure for chaining.
+		e.lastStatus = 1
+	}
+	leftOK := err == nil && e.lastStatus == 0
+
+	switch node.Operator {
+	case "&&":
+		if leftOK {
+			return e.evalExpressionValue(node.Right)
+		}
+	case "||":
+		if !leftOK {
+			return e.evalExpressionValue(node.Right)
+		}
+	}
+	return nil, nil
 }
 
 // builtinRange implements range(n) - returns [0, 1, 2, ..., n-1]

@@ -40,6 +40,16 @@ name = "Hello, World!"
 path = 'single quotes work too'
 ```
 
+**Interpolation:** double-quoted strings expand `$VAR` and `${VAR}` references
+(and `$?`); single-quoted strings are literal:
+
+```rsh
+user = "raven"
+print "hi $user"        # hi raven
+print "home: ${HOME}"   # home: /Users/you
+print 'literal $user'   # literal $user
+```
+
 ### Arrays
 
 Ordered collections of values:
@@ -417,6 +427,7 @@ print items
 | `lower(s)` | Lowercase a string | `lower("HI")` | `hi` |
 | `trim(s)` | Trim leading/trailing whitespace | `trim("  hi  ")` | `hi` |
 | `replace(s, old, new)` | Replace all occurrences | `replace("a-a", "a", "x")` | `x-x` |
+| `glob(pattern)` | Match files against a glob pattern | `glob("*.go")` | `[main.go, ...]` |
 
 ```rsh
 parts = split("alpha,beta,gamma", ",")
@@ -441,6 +452,43 @@ ls -la
 
 Command names may contain hyphens (`docker-compose up`). Output produced by the
 language itself uses the built-in `print`; bare words are for invoking programs.
+
+### Command Sequencing
+
+| Operator | Meaning |
+|----------|---------|
+| `a ; b` | Run `a`, then `b` |
+| `a && b` | Run `b` only if `a` succeeded (exit status 0) |
+| `a \|\| b` | Run `b` only if `a` failed (non-zero exit status) |
+| `a &` | Run `a` in the background |
+
+```rsh
+mkdir build ; cd build
+git pull && make
+test -f config || print "no config"
+sleep 60 &
+```
+
+`$?` holds the exit status of the most recent command:
+
+```rsh
+git --version
+print $?            # 0 on success, non-zero on failure
+```
+
+### Globbing
+
+Globbing is explicit and unambiguous via the `glob()` function (so it never
+clashes with the `*` multiplication operator). Array results are splatted into
+multiple command arguments:
+
+```rsh
+for f in glob("*.go") { print f }   # iterate matches
+rm glob("*.tmp")                    # remove all matching files
+print glob("src/*.go")              # directory patterns work too
+```
+
+`glob()` returns an empty array when nothing matches.
 
 ## Arrays
 

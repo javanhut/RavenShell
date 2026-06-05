@@ -92,6 +92,9 @@ func (il *IntegerLiteral) String() string       { return il.Token.Literal }
 type StringLiteral struct {
 	Token token.Token
 	Value string
+	// Interpolate is true for double-quoted strings, whose $VAR / ${VAR}
+	// references are expanded at evaluation time.
+	Interpolate bool
 }
 
 func (sl *StringLiteral) expressionNode()      {}
@@ -120,6 +123,39 @@ func (cs *CommandSubstitution) String() string {
 	return "$(" + cs.Command.String() + ")"
 }
 
+// LogicalExpression represents short-circuit && and || between commands.
+type LogicalExpression struct {
+	Token    token.Token // the && or || token
+	Operator string      // "&&" or "||"
+	Left     Expression
+	Right    Expression
+}
+
+func (le *LogicalExpression) expressionNode()      {}
+func (le *LogicalExpression) TokenLiteral() string { return le.Token.Literal }
+func (le *LogicalExpression) String() string {
+	return "(" + le.Left.String() + " " + le.Operator + " " + le.Right.String() + ")"
+}
+
+// BackgroundExpression represents a command run in the background with '&'.
+type BackgroundExpression struct {
+	Token   token.Token // the & token
+	Command Expression
+}
+
+func (be *BackgroundExpression) expressionNode()      {}
+func (be *BackgroundExpression) TokenLiteral() string { return be.Token.Literal }
+func (be *BackgroundExpression) String() string       { return be.Command.String() + " &" }
+
+// LastStatus represents $? - the exit status of the last command.
+type LastStatus struct {
+	Token token.Token
+}
+
+func (ls *LastStatus) expressionNode()      {}
+func (ls *LastStatus) TokenLiteral() string { return ls.Token.Literal }
+func (ls *LastStatus) String() string       { return "$?" }
+
 // CommandType represents the type of built-in command
 type CommandType string
 
@@ -139,6 +175,10 @@ const (
 	CMD_EXPORT     CommandType = "export"
 	CMD_ENV        CommandType = "env"
 	CMD_RAVENADD   CommandType = "raven-add"
+	CMD_PS         CommandType = "ps"
+	CMD_KILL       CommandType = "kill"
+	CMD_KILLALL    CommandType = "killall"
+	CMD_JOBS       CommandType = "jobs"
 	CMD_TILDE      CommandType = "~"
 	CMD_EXTERNAL   CommandType = "external"
 )

@@ -2,6 +2,7 @@ package readline
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,10 @@ import (
 	"golang.org/x/term"
 )
 
+// ErrInterrupt is returned by ReadLine when the user presses Ctrl-C, so the
+// caller can discard partially-entered input.
+var ErrInterrupt = errors.New("interrupt")
+
 // Key constants
 const (
 	keyCtrlA     = 1
@@ -20,6 +25,7 @@ const (
 	keyCtrlE     = 5
 	keyCtrlK     = 11
 	keyCtrlL     = 12
+	keyCtrlR     = 18
 	keyCtrlU     = 21
 	keyCtrlW     = 23
 	keyBackspace = 127
@@ -198,7 +204,7 @@ func (r *Readline) ReadLine() (string, error) {
 		case keyCtrlC:
 			r.draw(line, len(line), "")
 			fmt.Print("^C\r\n")
-			return "", nil
+			return "", ErrInterrupt
 
 		case keyCtrlD:
 			if len(line) == 0 {
@@ -253,6 +259,18 @@ func (r *Readline) ReadLine() (string, error) {
 				pos = start
 				r.refresh(line, pos)
 			}
+
+		case keyCtrlR: // Reverse incremental history search
+			nl, np, submit := r.reverseSearch()
+			if submit {
+				r.draw(nl, len(nl), "")
+				fmt.Print("\r\n")
+				result := string(nl)
+				r.AddHistory(result)
+				return result, nil
+			}
+			line, pos = nl, np
+			r.refresh(line, pos)
 
 		case keyCtrlL: // Clear screen
 			fmt.Print("\033[2J\033[H")
@@ -365,6 +383,81 @@ func (r *Readline) ReadLine() (string, error) {
 				pos++
 				r.refresh(line, pos)
 			}
+		}
+	}
+}
+
+// reverseSearch runs an incremental reverse history search (Ctrl-R). It returns
+// the resulting line, cursor position, and whether the user submitted it
+// (pressed Enter) versus accepting it for further editing.
+func (r *Readline) reverseSearch() ([]rune, int, bool) {
+	query := []rune{}
+	matchIdx := -1
+	match := ""
+
+	find := func(from int) (int, string) {
+		q := string(query)
+		if from >= len(r.history) {
+			from = len(r.history) - 1
+		}
+		for i := from; i >= 0; i-- {
+			if strings.Contains(r.history[i], q) {
+				return i, r.history[i]
+			}
+		}
+		return -1, ""
+	}
+
+	render := func() {
+		fmt.Print("\r\033[K")
+		fmt.Printf("(reverse-i-search)`%s': %s", string(query), match)
+	}
+
+	render()
+
+	buf := make([]byte, 1)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil || n == 0 {
+			return []rune(match), len([]rune(match)), false
+		}
+		switch b := buf[0]; {
+		case b == keyEnter:
+			if match != "" {
+				return []rune(match), len([]rune(match)), true
+			}
+			return []rune{}, 0, false
+
+		case b == keyCtrlC || b == keyEscape:
+			// Cancel: drop back to an empty editing line.
+			return []rune{}, 0, false
+
+		case b == keyCtrlR:
+			// Move to the next older match.
+			from := len(r.history) - 1
+			if matchIdx >= 0 {
+				from = matchIdx - 1
+			}
+			if i, m := find(from); i >= 0 {
+				matchIdx, match = i, m
+			}
+			render()
+
+		case b == keyBackspace:
+			if len(query) > 0 {
+				query = query[:len(query)-1]
+			}
+			matchIdx, match = find(len(r.history) - 1)
+			render()
+
+		case b >= 32 && b < 127:
+			query = append(query, rune(b))
+			matchIdx, match = find(len(r.history) - 1)
+			render()
+
+		default:
+			// Any other key accepts the current match for editing.
+			return []rune(match), len([]rune(match)), false
 		}
 	}
 }

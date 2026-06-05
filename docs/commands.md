@@ -380,6 +380,84 @@ print "a b c" | wc -w       # external commands work in pipes
 
 ---
 
+## Process Management Commands
+
+### ps - List Processes
+
+Lists running system processes, optionally filtered by a name substring
+(case-insensitive).
+
+**Syntax:**
+```
+ps [name-filter]
+```
+
+**Examples:**
+```rsh
+ps                  # list all processes
+ps chrome           # only processes whose name contains "chrome"
+```
+
+---
+
+### kill - Signal a Process
+
+Sends a signal to a process by PID or background job reference (`%N`). Defaults
+to `TERM`.
+
+**Syntax:**
+```
+kill <pid|%job> [signal]
+```
+
+**Signals:** name (`TERM`, `KILL`, `HUP`, `INT`, ...) with or without the `SIG`
+prefix, or a number (`9`, `15`).
+
+**Examples:**
+```rsh
+kill 1234           # send SIGTERM to pid 1234
+kill 1234 KILL      # send SIGKILL
+kill %1             # kill background job 1
+```
+
+---
+
+### killall - Signal Processes by Name
+
+Sends a signal to every process whose name contains the given text
+(case-insensitive). Defaults to `TERM`.
+
+**Syntax:**
+```
+killall <name> [signal]
+```
+
+**Examples:**
+```rsh
+killall node        # SIGTERM every process matching "node"
+killall chrome KILL # force-kill matching processes
+```
+
+---
+
+### jobs - List Background Jobs
+
+Lists background jobs started with `&`, with their job id, PID, and status.
+Completed jobs are dropped after being listed.
+
+**Syntax:**
+```
+jobs
+```
+
+**Example:**
+```rsh
+sleep 60 &          # [1] 12345
+jobs                # [1]  12345    running  sleep
+```
+
+---
+
 ## Session Commands
 
 ### exit / quit
@@ -460,4 +538,38 @@ command < file
 **Example:**
 ```rsh
 print < input.txt
+```
+
+---
+
+### Sequencing ( ; )
+
+Separates multiple commands on one line.
+
+```rsh
+mkdir build ; cd build ; ls
+```
+
+---
+
+### And ( && ) / Or ( || )
+
+`&&` runs the right command only if the left succeeded (exit status 0); `||`
+runs it only if the left failed.
+
+```rsh
+git pull && make                 # make only if pull succeeds
+test -f config || print "no config"
+```
+
+---
+
+### Background ( & )
+
+Runs an external command in the background and returns to the prompt
+immediately. The job's id and PID are printed, and it can be managed with
+`jobs` and `kill %id`.
+
+```rsh
+sleep 60 &
 ```

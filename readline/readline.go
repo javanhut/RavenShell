@@ -40,7 +40,8 @@ type Completer func(line string, pos int) []string
 
 // Readline handles interactive line editing with history and completion
 type Readline struct {
-	prompt          string
+	prompt          string // final (editable) prompt line, redrawn in place
+	promptHead      string // lines of a multi-line prompt above the final one
 	history         []string
 	historyIdx      int
 	historyFile     string // Path to the persistent history file (empty disables)
@@ -54,7 +55,6 @@ type Readline struct {
 // New creates a new Readline instance
 func New(prompt string) *Readline {
 	r := &Readline{
-		prompt:     prompt,
 		history:    make([]string, 0),
 		historyIdx: -1,
 		commands: []string{
@@ -66,6 +66,7 @@ func New(prompt string) *Readline {
 			"exit", "quit",
 		},
 	}
+	r.SetPrompt(prompt)
 
 	// Persist history across sessions in ~/.raven_history (fish-style).
 	if home, err := os.UserHomeDir(); err == nil {
@@ -188,6 +189,7 @@ func (r *Readline) ReadLine() (string, error) {
 	r.ensureFreshLine()
 
 	// Print prompt
+	r.printPromptHead()
 	fmt.Print(r.prompt)
 
 	buf := make([]byte, 3)
@@ -280,6 +282,7 @@ func (r *Readline) ReadLine() (string, error) {
 
 		case keyCtrlL: // Clear screen
 			fmt.Print("\033[2J\033[H")
+			r.printPromptHead()
 			fmt.Print(r.prompt)
 			r.refresh(line, pos)
 
@@ -298,6 +301,7 @@ func (r *Readline) ReadLine() (string, error) {
 					fmt.Printf("%s  ", c)
 				}
 				fmt.Print("\r\n")
+				r.printPromptHead()
 				fmt.Print(r.prompt)
 				r.refresh(line, pos)
 			}
@@ -734,9 +738,27 @@ func (r *Readline) applyCompletion(line []rune, pos int, completion string) ([]r
 	return []rune(newLine), len([]rune(newLine)) - len([]rune(rest))
 }
 
-// SetPrompt changes the prompt
+// SetPrompt changes the prompt. A multi-line prompt is split: every line but
+// the last (the "head") is printed once per read, and only the final line is
+// redrawn in place while editing.
 func (r *Readline) SetPrompt(prompt string) {
-	r.prompt = prompt
+	if i := strings.LastIndexByte(prompt, '\n'); i >= 0 {
+		r.promptHead = prompt[:i+1]
+		r.prompt = prompt[i+1:]
+	} else {
+		r.promptHead = ""
+		r.prompt = prompt
+	}
+}
+
+// printPromptHead prints the informational lines of a multi-line prompt. The
+// terminal is in raw mode while reading, so newlines need explicit carriage
+// returns.
+func (r *Readline) printPromptHead() {
+	if r.promptHead == "" {
+		return
+	}
+	fmt.Print("\r" + strings.ReplaceAll(r.promptHead, "\n", "\r\n"))
 }
 
 // ClearHistory clears the command history

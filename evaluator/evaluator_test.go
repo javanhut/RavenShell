@@ -387,3 +387,51 @@ func TestExternalCommandVariableFallback(t *testing.T) {
 		t.Errorf("fallback value = %q, want 42", out)
 	}
 }
+
+func TestCallPromptNoFunction(t *testing.T) {
+	e, _ := run(t, "x = 1")
+	if _, ok := e.CallPrompt(); ok {
+		t.Fatal("CallPrompt ok = true with no prompt function defined")
+	}
+}
+
+func TestCallPromptReturnsString(t *testing.T) {
+	e, _ := run(t, `fn prompt() {
+    return "raven> "
+}`)
+	got, ok := e.CallPrompt()
+	if !ok || got != "raven> " {
+		t.Fatalf("CallPrompt = %q, %v; want %q, true", got, ok, "raven> ")
+	}
+}
+
+func TestCallPromptReceivesLastStatus(t *testing.T) {
+	e, _ := run(t, `fn prompt(status) {
+    return "s:" + status
+}`)
+	e.lastStatus = 42
+	got, ok := e.CallPrompt()
+	if !ok || got != "s:42" {
+		t.Fatalf("CallPrompt = %q, %v; want %q, true", got, ok, "s:42")
+	}
+}
+
+func TestCallPromptPreservesLastStatus(t *testing.T) {
+	e, _ := run(t, `fn prompt() {
+    return $(false) + "> "
+}`)
+	e.lastStatus = 7
+	e.CallPrompt()
+	if e.lastStatus != 7 {
+		t.Fatalf("lastStatus = %d after CallPrompt, want 7", e.lastStatus)
+	}
+}
+
+func TestCallPromptEmptyFallsBack(t *testing.T) {
+	e, _ := run(t, `fn prompt() {
+    return ""
+}`)
+	if _, ok := e.CallPrompt(); ok {
+		t.Fatal("CallPrompt ok = true for empty prompt, want fallback")
+	}
+}

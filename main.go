@@ -212,6 +212,21 @@ func loadRavenRC(eval *evaluator.Evaluator) {
 	runSource(eval, string(content), ".ravenrc")
 }
 
+// loadInitScript runs the script pointed to by $RAVEN_INIT_SCRIPT, if set.
+// Terminal emulators (e.g. RavenTerminal) use it to inject prompt/detect
+// functions and exports without touching the user's .ravenrc.
+func loadInitScript(eval *evaluator.Evaluator) {
+	path := os.Getenv("RAVEN_INIT_SCRIPT")
+	if path == "" {
+		return
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	runSource(eval, string(content), filepath.Base(path))
+}
+
 // makePrompt builds a colored, fish-style prompt showing the current directory
 // (with the home directory abbreviated to ~).
 func makePrompt(cwd string) string {
@@ -226,13 +241,24 @@ func makePrompt(cwd string) string {
 	return colorize(ansi.Cyan, display) + " " + colorize(ansi.Green+ansi.Bold, "❯") + " "
 }
 
+// shellPrompt returns the prompt for the next REPL read: the output of a
+// user-defined `prompt` function when one exists (defined in .ravenrc or an
+// init script), the built-in colored cwd prompt otherwise.
+func shellPrompt(eval *evaluator.Evaluator) string {
+	if p, ok := eval.CallPrompt(); ok {
+		return p
+	}
+	return makePrompt(eval.GetCwd())
+}
+
 func repl() {
 	eval := evaluator.New()
 
-	// Load .ravenrc configuration file
+	// Load .ravenrc configuration file, then any injected init script.
 	loadRavenRC(eval)
+	loadInitScript(eval)
 
-	rl := readline.New(makePrompt(eval.GetCwd()))
+	rl := readline.New(shellPrompt(eval))
 
 	// Set up path completion to use evaluator's current directory
 	rl.SetCwdFunc(eval.GetCwd)
@@ -257,7 +283,7 @@ func repl() {
 			rl.SetPrompt(contPrompt)
 		} else {
 			// Refresh the prompt so it reflects the current directory after cd.
-			rl.SetPrompt(makePrompt(eval.GetCwd()))
+			rl.SetPrompt(shellPrompt(eval))
 		}
 
 		input, err := rl.ReadLine()

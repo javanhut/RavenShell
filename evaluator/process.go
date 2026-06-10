@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -88,9 +89,22 @@ func (e *Evaluator) startBackground(name string, args []string) (string, error) 
 	c.Stdin = nil
 
 	if err := c.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
-		e.lastStatus = 1
-		return "", nil
+		if errors.Is(err, syscall.ENOEXEC) {
+			// Executable scripts with no shebang line: POSIX shells fall back
+			// to interpreting the file with /bin/sh.
+			c = exec.Command("/bin/sh", append([]string{path}, args...)...)
+			c.Dir = e.cwd
+			c.Env = e.buildEnv()
+			c.Stdout = e.stdout
+			c.Stderr = os.Stderr
+			c.Stdin = nil
+			err = c.Start()
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			e.lastStatus = 1
+			return "", nil
+		}
 	}
 
 	j := e.addJob(c.Process.Pid, name)

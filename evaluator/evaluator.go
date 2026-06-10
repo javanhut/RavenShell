@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -480,8 +481,14 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 				return e.valueToString(val), nil
 			}
 		}
-		// Like a real shell, a missing command sets a non-zero status and
-		// reports to stderr, but does not abort the program.
+		// Like a real shell, an existing but non-executable file and a missing
+		// command set distinct non-zero statuses and report to stderr, but do
+		// not abort the program.
+		if errors.Is(err, os.ErrPermission) {
+			fmt.Fprintf(os.Stderr, "%s: permission denied\n", name)
+			e.lastStatus = 126
+			return "", nil
+		}
 		fmt.Fprintf(os.Stderr, "%s: command not found\n", name)
 		e.lastStatus = 127
 		return "", nil
@@ -495,6 +502,17 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 	c.Env = e.buildEnv()
 
 	err = c.Run()
+	if errors.Is(err, syscall.ENOEXEC) {
+		// Executable scripts with no shebang line: POSIX shells fall back to
+		// interpreting the file with /bin/sh.
+		c = exec.Command("/bin/sh", append([]string{path}, args...)...)
+		c.Dir = e.cwd
+		c.Stdin = e.stdin
+		c.Stdout = e.stdout
+		c.Stderr = os.Stderr
+		c.Env = e.buildEnv()
+		err = c.Run()
+	}
 	e.lastStatus = exitStatus(err)
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); !ok {
@@ -531,6 +549,9 @@ func (e *Evaluator) lookPath(name string) (string, error) {
 		resolved := e.resolvePath(name)
 		if isExecutableFile(resolved) {
 			return resolved, nil
+		}
+		if info, err := os.Stat(resolved); err == nil && !info.IsDir() {
+			return "", os.ErrPermission
 		}
 		return "", exec.ErrNotFound
 	}
@@ -1229,6 +1250,35 @@ func (e *Evaluator) expandVariable(name string) string {
 // GetCwd returns the current working directory
 func (e *Evaluator) GetCwd() string {
 	return e.cwd
+}
+
+// CallPrompt invokes a user-defined `prompt` function (if any) and renders its
+// return value as the REPL prompt. The function may take no parameters, or one
+// parameter that receives the exit status of the last command ($?). It returns
+// ok=false when no usable prompt function is defined, the call errors, or it
+// produces an empty prompt — callers then fall back to the built-in prompt.
+func (e *Evaluator) CallPrompt() (string, bool) {
+	fn, exists := e.funcs["prompt"]
+	if !exists || len(fn.Parameters) > 1 {
+		return "", false
+	}
+	var args []Value
+	if len(fn.Parameters) == 1 {
+		args = []Value{int64(e.lastStatus)}
+	}
+	// Commands run inside the prompt function must not clobber the $? seen by
+	// the user's next command.
+	saved := e.lastStatus
+	val, err := e.callFunction(fn, args)
+	e.lastStatus = saved
+	if err != nil || val == nil {
+		return "", false
+	}
+	s := e.valueToString(val)
+	if s == "" {
+		return "", false
+	}
+	return s, true
 }
 
 // SetEnv sets an environment variable

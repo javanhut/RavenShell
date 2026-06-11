@@ -35,8 +35,23 @@ const (
 	keyEscape    = 27
 )
 
+// Candidate is one completion choice. Text replaces the word being completed;
+// Desc, when non-empty, is shown dimmed next to it in the completion listing;
+// Style is an optional ANSI code applied to Text in the listing (e.g.
+// file-type colors), never inserted into the line.
+type Candidate struct {
+	Text  string
+	Desc  string
+	Style string
+}
+
+// styled returns the candidate's text wrapped in its display style.
+func (c Candidate) styled() string {
+	return ansi.Wrap(c.Style, c.Text)
+}
+
 // Completer is a function that returns completions for a given line and cursor position
-type Completer func(line string, pos int) []string
+type Completer func(line string, pos int) []Candidate
 
 // Readline handles interactive line editing with history and completion
 type Readline struct {
@@ -288,22 +303,25 @@ func (r *Readline) ReadLine() (string, error) {
 
 		case keyTab:
 			completions := r.complete(string(line), pos)
-			if len(completions) == 1 {
+			switch {
+			case len(completions) == 1:
 				// Single completion - insert it
-				newLine, newPos := r.applyCompletion(line, pos, completions[0])
-				line = newLine
-				pos = newPos
+				line, pos = r.applyCompletion(line, pos, completions[0].Text, true)
 				r.refresh(line, pos)
-			} else if len(completions) > 1 {
-				// Multiple completions - show them
-				fmt.Print("\r\n")
-				for _, c := range completions {
-					fmt.Printf("%s  ", c)
+			case len(completions) > 1:
+				// First extend the word to the longest common prefix of all
+				// candidates (fish-style); once nothing more can be inserted,
+				// a further Tab shows the listing.
+				word := currentWord(string(line[:pos]))
+				if cp := commonPrefix(completions); len(cp) > len(word) {
+					line, pos = r.applyCompletion(line, pos, cp, false)
+					r.refresh(line, pos)
+				} else {
+					r.printCandidates(completions)
+					r.printPromptHead()
+					fmt.Print(r.prompt)
+					r.refresh(line, pos)
 				}
-				fmt.Print("\r\n")
-				r.printPromptHead()
-				fmt.Print(r.prompt)
-				r.refresh(line, pos)
 			}
 
 		case keyEscape:
@@ -573,14 +591,19 @@ func (r *Readline) draw(line []rune, pos int, suggestion string) {
 }
 
 // complete returns completions for the current input
-func (r *Readline) complete(line string, pos int) []string {
+func (r *Readline) complete(line string, pos int) []Candidate {
 	// Use custom completer if set
 	if r.completer != nil {
 		return r.completer(line, pos)
 	}
 
 	// Default completion
-	return r.defaultComplete(line, pos)
+	texts := r.defaultComplete(line, pos)
+	out := make([]Candidate, len(texts))
+	for i, t := range texts {
+		out[i] = Candidate{Text: t}
+	}
+	return out
 }
 
 // defaultComplete provides basic command and path completion
@@ -701,8 +724,117 @@ func (r *Readline) completePath(prefix string) []string {
 	return matches
 }
 
-// applyCompletion applies a completion to the line
-func (r *Readline) applyCompletion(line []rune, pos int, completion string) ([]rune, int) {
+// currentWord returns the whitespace-delimited word being completed at the
+// end of the given line prefix ("" when the prefix ends in a space).
+func currentWord(beforeCursor string) string {
+	if beforeCursor == "" || beforeCursor[len(beforeCursor)-1] == ' ' {
+		return ""
+	}
+	fields := strings.Fields(beforeCursor)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[len(fields)-1]
+}
+
+// commonPrefix returns the longest prefix shared by every candidate's text.
+func commonPrefix(cands []Candidate) string {
+	if len(cands) == 0 {
+		return ""
+	}
+	prefix := cands[0].Text
+	for _, c := range cands[1:] {
+		for !strings.HasPrefix(c.Text, prefix) {
+			prefix = prefix[:len(prefix)-1]
+			if prefix == "" {
+				return ""
+			}
+		}
+	}
+	return prefix
+}
+
+// printCandidates renders the completion listing below the current line:
+// fish-pager style with dimmed descriptions when the set is small enough,
+// plain columns otherwise. The terminal is in raw mode, so lines end in \r\n.
+func (r *Readline) printCandidates(cands []Candidate) {
+	fmt.Print("\r\n")
+
+	width := 80
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+		width = w
+	}
+
+	const maxShow = 100
+	shown := cands
+	if len(cands) > maxShow {
+		shown = cands[:maxShow]
+	}
+
+	maxText := 0
+	hasDesc := false
+	for _, c := range shown {
+		if len(c.Text) > maxText {
+			maxText = len(c.Text)
+		}
+		if c.Desc != "" {
+			hasDesc = true
+		}
+	}
+
+	// Padding is computed from the plain text length so ANSI style codes do
+	// not break column alignment.
+	if hasDesc && len(shown) <= 30 {
+		// One candidate per row with its description.
+		for _, c := range shown {
+			row := c.styled() + strings.Repeat(" ", maxText-len(c.Text))
+			if c.Desc != "" {
+				desc := c.Desc
+				if avail := width - maxText - 3; avail > 0 && len(desc) > avail {
+					if avail > 1 {
+						desc = desc[:avail-1] + "…"
+					} else {
+						desc = ""
+					}
+				}
+				if desc != "" {
+					row += "  " + ansi.BrightBlk + desc + ansi.Reset
+				}
+			}
+			fmt.Print(row + "\r\n")
+		}
+	} else {
+		// Plain columns of candidate text, row-major.
+		colWidth := maxText + 2
+		cols := width / colWidth
+		if cols < 1 {
+			cols = 1
+		}
+		rows := (len(shown) + cols - 1) / cols
+		for row := 0; row < rows; row++ {
+			for col := 0; col < cols; col++ {
+				i := row*cols + col
+				if i >= len(shown) {
+					break
+				}
+				fmt.Print(shown[i].styled())
+				if col != cols-1 && i != len(shown)-1 {
+					fmt.Print(strings.Repeat(" ", colWidth-len(shown[i].Text)))
+				}
+			}
+			fmt.Print("\r\n")
+		}
+	}
+
+	if extra := len(cands) - len(shown); extra > 0 {
+		fmt.Printf("%s…and %d more%s\r\n", ansi.BrightBlk, extra, ansi.Reset)
+	}
+}
+
+// applyCompletion replaces the word being completed with completion. addSpace
+// appends a space after a fully-applied completion (skipped for directories,
+// which invite further completion, and for common-prefix insertions).
+func (r *Readline) applyCompletion(line []rune, pos int, completion string, addSpace bool) ([]rune, int) {
 	lineStr := string(line[:pos])
 	parts := strings.Fields(lineStr)
 
@@ -730,7 +862,7 @@ func (r *Readline) applyCompletion(line []rune, pos int, completion string) ([]r
 	}
 
 	// Add space after completion if it's not a directory
-	if !strings.HasSuffix(completion, "/") {
+	if addSpace && !strings.HasSuffix(completion, "/") {
 		newLine += " "
 	}
 	newLine += rest

@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"ravenshell/ansi"
+	"ravenshell/completion"
 	"ravenshell/evaluator"
 	"ravenshell/lexer"
 	"ravenshell/parser"
@@ -265,6 +266,18 @@ func repl() {
 
 	// Offer user-defined functions and PATH executables as tab completions.
 	rl.SetCommandProvider(eval.AvailableCommands)
+
+	// Fish-style completion: per-command specs (subcommands, flags, dynamic
+	// arguments) with descriptions, user spec files, and a --help fallback.
+	engine := completion.New(eval.GetCwd, eval.AvailableCommands, evaluator.BuiltinSummaries())
+	rl.SetCompleter(func(line string, pos int) []readline.Candidate {
+		cands := engine.Complete(line, pos)
+		out := make([]readline.Candidate, len(cands))
+		for i, c := range cands {
+			out[i] = readline.Candidate{Text: c.Text, Desc: c.Desc, Style: c.Style}
+		}
+		return out
+	})
 
 	// Interrupt running commands/loops with Ctrl-C without killing the shell.
 	sigCh := make(chan os.Signal, 1)

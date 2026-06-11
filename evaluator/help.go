@@ -68,6 +68,19 @@ func builtinCommandNames() []string {
 	return names
 }
 
+// BuiltinSummaries returns every built-in command name and alias mapped to
+// its one-line summary, used by tab completion to describe candidates.
+func BuiltinSummaries() map[string]string {
+	m := make(map[string]string, len(helpEntries)*2)
+	for _, h := range helpEntries {
+		m[h.name] = h.summary
+		for _, a := range h.aliases {
+			m[a] = h.summary
+		}
+	}
+	return m
+}
+
 // findHelp looks up a help entry by canonical name or any of its aliases.
 func findHelp(name string) (helpEntry, bool) {
 	for _, h := range helpEntries {

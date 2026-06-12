@@ -163,7 +163,7 @@ func TestForLoopCreatesFiles(t *testing.T) {
 	if _, err := evalScript(t, dir, src); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		name := filepath.Join(dir, "file"+string(rune('0'+i))+".txt")
 		if _, err := os.Stat(name); err != nil {
 			t.Errorf("loop did not create %s: %v", name, err)

@@ -3,6 +3,7 @@ package evaluator
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -87,10 +88,8 @@ func findHelp(name string) (helpEntry, bool) {
 		if h.name == name {
 			return h, true
 		}
-		for _, a := range h.aliases {
-			if a == name {
-				return h, true
-			}
+		if slices.Contains(h.aliases, name) {
+			return h, true
 		}
 	}
 	return helpEntry{}, false

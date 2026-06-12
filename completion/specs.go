@@ -311,7 +311,7 @@ func makefileTargets(cwd string) []Candidate {
 		}
 		seen := make(map[string]bool)
 		var out []Candidate
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			// Targets start at column 1; recipes, comments, and special
 			// targets (.PHONY etc.) do not produce candidates.
 			if line == "" || line[0] == '\t' || line[0] == ' ' || line[0] == '#' || line[0] == '.' {

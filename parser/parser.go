@@ -6,6 +6,7 @@ import (
 	"ravenshell/lexer"
 	"ravenshell/token"
 	"strconv"
+	"strings"
 )
 
 // Operator precedence levels (lower = binds looser)
@@ -540,20 +541,21 @@ func (p *Parser) parsePath() ast.Expression {
 	// (archive.tar.gz), dotfiles (.gitignore), and dotfiles with extensions
 	// (.env.local) all stay intact. Whitespace is the only delimiter between
 	// separate path arguments.
-	pathStr := p.curToken.Literal
+	var pathStr strings.Builder
+	pathStr.WriteString(p.curToken.Literal)
 	for p.isPathContinuation(p.peekToken) {
 		if p.peekToken.PrecededByWhitespace {
 			break
 		}
 		p.nextToken()
-		pathStr += p.curToken.Literal
+		pathStr.WriteString(p.curToken.Literal)
 	}
 
-	path.Value = pathStr
+	path.Value = pathStr.String()
 	// A path at the start of a statement (./a.out, /usr/bin/tool) runs as an
 	// external command.
 	if cmdPos {
-		return p.finishExternalCommand(pathStr)
+		return p.finishExternalCommand(pathStr.String())
 	}
 	return path
 }
@@ -563,17 +565,18 @@ func (p *Parser) parsePath() ast.Expression {
 // between them join into a single path; whitespace ends the path.
 func (p *Parser) parsePathFromIdent() ast.Expression {
 	path := &ast.PathExpression{Token: p.curToken}
-	pathStr := p.curToken.Literal
+	var pathStr strings.Builder
+	pathStr.WriteString(p.curToken.Literal)
 
 	for p.isPathContinuation(p.peekToken) {
 		if p.peekToken.PrecededByWhitespace {
 			break
 		}
 		p.nextToken()
-		pathStr += p.curToken.Literal
+		pathStr.WriteString(p.curToken.Literal)
 	}
 
-	path.Value = pathStr
+	path.Value = pathStr.String()
 	return path
 }
 

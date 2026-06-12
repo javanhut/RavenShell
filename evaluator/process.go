@@ -319,7 +319,7 @@ func listProcesses() ([]procInfo, error) {
 	}
 
 	var procs []procInfo
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

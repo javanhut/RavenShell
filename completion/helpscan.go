@@ -55,7 +55,7 @@ var descSplit = regexp.MustCompile(`\t|\s{2,}`)
 func parseHelpFlags(help string) []Candidate {
 	seen := make(map[string]bool)
 	var out []Candidate
-	for _, line := range strings.Split(help, "\n") {
+	for line := range strings.SplitSeq(help, "\n") {
 		s := strings.TrimLeft(line, " \t")
 		if !strings.HasPrefix(s, "-") {
 			continue
@@ -69,7 +69,7 @@ func parseHelpFlags(help string) []Candidate {
 
 		// The flag column may hold several comma-separated spellings, each
 		// possibly with a value placeholder ("--file=PATH", "-o <file>").
-		for _, tok := range strings.Split(parts[0], ",") {
+		for tok := range strings.SplitSeq(parts[0], ",") {
 			tok = strings.TrimSpace(tok)
 			flag := flagToken.FindString(tok)
 			if flag == "" || flag == "-" || flag == "--" || seen[flag] {

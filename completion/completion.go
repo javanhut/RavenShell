@@ -236,7 +236,7 @@ func (e *Engine) runGenerator(cmdline string) []Candidate {
 	}
 
 	var out []Candidate
-	for _, line := range strings.Split(string(outBytes), "\n") {
+	for line := range strings.SplitSeq(string(outBytes), "\n") {
 		line = strings.TrimRight(line, "\r")
 		if line == "" {
 			continue

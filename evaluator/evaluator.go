@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"ravenshell/ansi"
 	"ravenshell/ast"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,7 +24,7 @@ import (
 )
 
 // Value represents any value in the shell
-type Value interface{}
+type Value any
 
 // controlKind identifies a non-local control-flow transfer.
 type controlKind int
@@ -139,7 +141,7 @@ func (e *Evaluator) loadSearchPaths() {
 	if err != nil {
 		return
 	}
-	for _, line := range strings.Split(string(content), "\n") {
+	for line := range strings.SplitSeq(string(content), "\n") {
 		dir := strings.TrimSpace(line)
 		if dir != "" {
 			e.searchPaths = append(e.searchPaths, dir)
@@ -580,13 +582,11 @@ func isExecutableFile(path string) bool {
 func (e *Evaluator) buildEnv() []string {
 	merged := make(map[string]string)
 	for _, kv := range os.Environ() {
-		if i := strings.IndexByte(kv, '='); i >= 0 {
-			merged[kv[:i]] = kv[i+1:]
+		if before, after, ok := strings.Cut(kv, "="); ok {
+			merged[before] = after
 		}
 	}
-	for k, v := range e.env {
-		merged[k] = v
-	}
+	maps.Copy(merged, e.env)
 	if len(e.searchPaths) > 0 {
 		extra := strings.Join(e.searchPaths, string(os.PathListSeparator))
 		if existing := merged["PATH"]; existing != "" {
@@ -804,8 +804,8 @@ func formatColumns(names, display []string, perCol int) string {
 
 	// Width of each column = widest visible name it contains.
 	colWidth := make([]int, numCols)
-	for c := 0; c < numCols; c++ {
-		for r := 0; r < perCol; r++ {
+	for c := range numCols {
+		for r := range perCol {
 			idx := c*perCol + r
 			if idx >= n {
 				break
@@ -819,7 +819,7 @@ func formatColumns(names, display []string, perCol int) string {
 	const gap = 2
 	var out bytes.Buffer
 	for r := 0; r < rows; r++ {
-		for c := 0; c < numCols; c++ {
+		for c := range numCols {
 			idx := c*perCol + r
 			if idx >= n {
 				continue
@@ -1041,13 +1041,11 @@ func (e *Evaluator) execExport(args []string) (string, error) {
 func (e *Evaluator) execEnv() (string, error) {
 	merged := make(map[string]string)
 	for _, kv := range os.Environ() {
-		if i := strings.IndexByte(kv, '='); i >= 0 {
-			merged[kv[:i]] = kv[i+1:]
+		if before, after, ok := strings.Cut(kv, "="); ok {
+			merged[before] = after
 		}
 	}
-	for k, v := range e.env {
-		merged[k] = v
-	}
+	maps.Copy(merged, e.env)
 
 	names := make([]string, 0, len(merged))
 	for k := range merged {
@@ -1110,10 +1108,8 @@ func (e *Evaluator) execRavenAdd(args []string) (string, error) {
 // addSearchPath registers dir as an extra executable search directory and
 // persists it. It returns false if dir was already registered.
 func (e *Evaluator) addSearchPath(dir string) bool {
-	for _, existing := range e.searchPaths {
-		if existing == dir {
-			return false
-		}
+	if slices.Contains(e.searchPaths, dir) {
+		return false
 	}
 	// New directories take priority over existing ones.
 	e.searchPaths = append([]string{dir}, e.searchPaths...)
@@ -1729,7 +1725,7 @@ func (e *Evaluator) builtinRange(args []ast.Expression) (Value, error) {
 	}
 
 	result := make([]Value, n)
-	for i := int64(0); i < n; i++ {
+	for i := range n {
 		result[i] = i
 	}
 	return result, nil

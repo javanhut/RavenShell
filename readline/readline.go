@@ -449,7 +449,7 @@ func (r *Readline) cursorColumn() (int, bool) {
 	// against a terminal that never sends 'R'.
 	var resp []byte
 	b := make([]byte, 1)
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		n, err := os.Stdin.Read(b)
 		if err != nil || n == 0 {
 			return 0, false
@@ -806,12 +806,9 @@ func (r *Readline) printCandidates(cands []Candidate) {
 	} else {
 		// Plain columns of candidate text, row-major.
 		colWidth := maxText + 2
-		cols := width / colWidth
-		if cols < 1 {
-			cols = 1
-		}
+		cols := max(width/colWidth, 1)
 		rows := (len(shown) + cols - 1) / cols
-		for row := 0; row < rows; row++ {
+		for row := range rows {
 			for col := 0; col < cols; col++ {
 				i := row*cols + col
 				if i >= len(shown) {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"ravenshell/lexer"
 	"ravenshell/parser"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -272,12 +273,7 @@ func TestAvailableCommandsIncludesFunctionsAndExecutables(t *testing.T) {
 
 	cmds := e.AvailableCommands()
 	has := func(name string) bool {
-		for _, c := range cmds {
-			if c == name {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(cmds, name)
 	}
 	if !has("myfunc") {
 		t.Error("AvailableCommands missing user function myfunc")

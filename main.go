@@ -54,7 +54,7 @@ func main() {
 	args := os.Args[1:]
 	script := ""
 
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		arg := args[i]
 		switch {
 		case arg == "-c" || arg == "--command":

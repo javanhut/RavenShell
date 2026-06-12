@@ -441,6 +441,11 @@ func (r *Readline) ensureFreshLine() {
 // ESC [ row ; col R reply. It returns the column and true on success, or 0 and
 // false if the reply is missing or malformed.
 func (r *Readline) cursorColumn() (int, bool) {
+	// With stdout redirected the query never reaches the terminal and the
+	// reply never comes, so the read below would block eating keystrokes.
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		return 0, false
+	}
 	if _, err := os.Stdout.WriteString("\x1b[6n"); err != nil {
 		return 0, false
 	}
@@ -809,7 +814,7 @@ func (r *Readline) printCandidates(cands []Candidate) {
 		cols := max(width/colWidth, 1)
 		rows := (len(shown) + cols - 1) / cols
 		for row := range rows {
-			for col := 0; col < cols; col++ {
+			for col := range cols {
 				i := row*cols + col
 				if i >= len(shown) {
 					break

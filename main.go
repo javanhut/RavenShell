@@ -87,9 +87,11 @@ func main() {
 		return
 	}
 
-	// A terminal on stdin means interactive use; otherwise read a program from
-	// stdin (e.g. `ravenshell < script.rsh` or piped input).
-	if term.IsTerminal(int(os.Stdin.Fd())) {
+	// Interactive use requires a terminal on both stdin and stdout: with stdout
+	// redirected (e.g. `ravenshell >> file`) the REPL would render its prompt
+	// and cursor-position queries into the file and appear frozen. Otherwise
+	// read a program from stdin (e.g. `ravenshell < script.rsh` or piped input).
+	if term.IsTerminal(int(os.Stdin.Fd())) && stdoutIsTerminal() {
 		fmt.Println("Welcome to Raven Shell.")
 		repl()
 	} else {

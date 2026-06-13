@@ -356,16 +356,22 @@ func (p *Parser) finishExternalCommand(name string) ast.Expression {
 		Name:  name,
 		Type:  ast.CMD_EXTERNAL,
 	}
-	cmd.Arguments = p.parseExternalArguments()
+	cmd.Arguments = p.parseArguments()
 	return cmd
 }
 
-// parseExternalArguments collects arguments for an external command. Unlike
-// built-in commands, external commands also accept FLAG tokens.
-func (p *Parser) parseExternalArguments() []ast.Expression {
+// parseArguments collects the arguments that follow a command name (external or
+// built-in), stopping at a newline, a shell operator (|, &&, >, ;, ...), or the
+// start of a new assignment statement.
+//
+// Reserved keywords (ls, rm, cd, env, for, ...) that appear here are taken as
+// literal argument words rather than dispatched as commands of their own. This
+// is what lets `podman ls`, `sudo rm -rf x`, or `grep for main.go` pass the
+// keyword to the command instead of being split into two separate commands.
+func (p *Parser) parseArguments() []ast.Expression {
 	args := []ast.Expression{}
 
-	for p.isArgumentToken(p.peekToken.Type) || p.peekTokenIs(token.FLAG) {
+	for p.peekStartsArgument() {
 		// A newline ends the command's argument list.
 		if p.peekToken.PrecededByNewline {
 			break
@@ -376,11 +382,40 @@ func (p *Parser) parseExternalArguments() []ast.Expression {
 		}
 
 		p.nextToken()
-		// Use PIPE precedence so pipes and redirects are left for the caller.
-		args = append(args, p.parseExpression(PIPE))
+		args = append(args, p.parseArgument())
 	}
 
 	return args
+}
+
+// peekStartsArgument reports whether the peek token can begin another argument
+// word for the current command: a normal argument token, a flag, or a reserved
+// keyword being used as a bare word.
+func (p *Parser) peekStartsArgument() bool {
+	return p.isArgumentToken(p.peekToken.Type) || isBareWord(p.peekToken)
+}
+
+// parseArgument parses the current token as a single command argument. A
+// reserved keyword used as a bare word (the "ls" in `podman ls`) is taken as a
+// literal word, joining any glued path continuation (config.toml, dir/file)
+// into one path, mirroring parseRedirectionTarget.
+func (p *Parser) parseArgument() ast.Expression {
+	if isBareWord(p.curToken) {
+		if (p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP)) && !p.peekToken.PrecededByWhitespace {
+			return p.parsePathFromIdent()
+		}
+		return &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
+	// Use PIPE precedence so pipes and redirects are left for the caller.
+	return p.parseExpression(PIPE)
+}
+
+// isBareWord reports whether tok is a reserved keyword being used as a plain
+// word (its literal maps back to its own token type). As an argument to a
+// command such a token is literal text, not a nested command.
+func isBareWord(tok token.Token) bool {
+	t, ok := token.TokenMap[tok.Literal]
+	return ok && t == tok.Type
 }
 
 // parseCommandKeyword handles command keyword tokens (LIST, REMOVE, etc.)
@@ -429,32 +464,9 @@ func (p *Parser) parseCommand(cmdTokenType token.TokenType) ast.Expression {
 	}
 
 	// Parse arguments until we hit an operator or EOF
-	cmd.Arguments = p.parseCommandArguments()
+	cmd.Arguments = p.parseArguments()
 
 	return cmd
-}
-
-func (p *Parser) parseCommandArguments() []ast.Expression {
-	args := []ast.Expression{}
-
-	// Continue while next token can start an argument expression
-	for p.isArgumentToken(p.peekToken.Type) {
-		// A newline ends the command's argument list.
-		if p.peekToken.PrecededByNewline {
-			break
-		}
-		// Stop if we see IDENT followed by ASSIGN - that's a new assignment statement
-		if p.peekTokenIs(token.IDENT) && p.isNextAssignment() {
-			break
-		}
-
-		p.nextToken()
-		// Parse a full expression (handles operators like +)
-		// Use PIPE precedence so pipes and redirects are not consumed
-		args = append(args, p.parseExpression(PIPE))
-	}
-
-	return args
 }
 
 // isNextAssignment checks if peek token is IDENT and the token after that is ASSIGN

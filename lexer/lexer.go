@@ -127,6 +127,15 @@ func (l *Lexer) scanToken() token.Token {
 		return token.Token{Type: token.RBRACKET, Literal: string(l.advance())}
 	case ',':
 		return token.Token{Type: token.COMMA, Literal: string(l.advance())}
+	case ':', '@':
+		// A bareword may legitimately begin with ':' or '@' (e.g. ":latest" or
+		// an npm scope like "@scope/pkg" written after a space). Scan it as an
+		// identifier so the punctuation never falls through to an ILLEGAL token.
+		start := l.pos
+		for isWordByte(l.peek()) {
+			l.advance()
+		}
+		return token.Token{Type: token.IDENT, Literal: l.input[start:l.pos]}
 	case '+':
 		return token.Token{Type: token.PLUS, Literal: string(l.advance())}
 	case '-':
@@ -256,12 +265,21 @@ func (l *Lexer) scanToken() token.Token {
 		for unicode.IsDigit(rune(l.peek())) {
 			l.advance()
 		}
+		// Digits glued to ':' or '@' form a bareword (a port mapping like
+		// 8080:80, a tag like 1.0@beta), not an integer literal, so keep
+		// scanning the rest of the word.
+		if isWordPunct(l.peek()) {
+			for isWordByte(l.peek()) {
+				l.advance()
+			}
+			return token.Token{Type: token.IDENT, Literal: l.input[start:l.pos]}
+		}
 		return token.Token{Type: token.INTEGER, Literal: l.input[start:l.pos]}
 	} else if unicode.IsLetter(rune(ch)) || ch == '_' {
 		start := l.pos
 		for {
 			c := l.peek()
-			if isAlphanumeric(c) {
+			if isWordByte(c) {
 				l.advance()
 				continue
 			}
@@ -286,6 +304,21 @@ func (l *Lexer) scanToken() token.Token {
 
 func isAlphanumeric(ch byte) bool {
 	return unicode.IsLetter(rune(ch)) || unicode.IsDigit(rune(ch)) || ch == '_'
+}
+
+// isWordByte reports whether ch may appear inside an unquoted bareword token (a
+// command name, argument, or path segment). Beyond the usual identifier
+// characters this includes ':' and '@', so words such as image:tag, host:8080,
+// scheme://host, and user@host stay a single token instead of breaking apart on
+// the punctuation (which would otherwise lex as an ILLEGAL token).
+func isWordByte(ch byte) bool {
+	return isAlphanumeric(ch) || isWordPunct(ch)
+}
+
+// isWordPunct reports whether ch is word-internal punctuation (':' or '@') —
+// allowed inside a bareword, including right after a run of digits.
+func isWordPunct(ch byte) bool {
+	return ch == ':' || ch == '@'
 }
 
 // isFlagTerminator reports whether ch ends a command flag token. Flags run

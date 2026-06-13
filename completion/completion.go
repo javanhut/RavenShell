@@ -281,9 +281,10 @@ func (e *Engine) completePath(prefix string, dirsOnly bool) []Candidate {
 	var out []Candidate
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasPrefix(name, namePart) {
-			continue
-		}
+		// Matching the typed text (prefix first, fuzzy fallback) is left to
+		// finish, which sees the full word; here we only decide which entries
+		// are eligible at all (dotfile and dirs-only visibility).
+		//
 		// Hide dotfiles unless the user is explicitly completing one.
 		if strings.HasPrefix(name, ".") && !strings.HasPrefix(namePart, ".") {
 			continue
@@ -322,18 +323,91 @@ func (e *Engine) completePath(prefix string, dirsOnly bool) []Candidate {
 	return out
 }
 
-// finish prefix-filters, dedupes (keeping the first occurrence, so spec
-// candidates win over file-fallback duplicates), and sorts candidates.
+// finish matches candidates against the typed prefix, dedupes (keeping the
+// first occurrence, so spec candidates win over file-fallback duplicates), and
+// sorts the result.
+//
+// Matching is prefix-first: an exact (case-sensitive) prefix match is always
+// preferred and preserves the precise behavior of tab-completion. Only when the
+// prefix matches nothing does a light fuzzy fallback kick in, accepting any
+// candidate whose text contains the typed characters as a case-insensitive
+// subsequence (so "dwn" still finds "Downloads"). Fuzzy results are ordered by
+// match quality.
 func finish(cands []Candidate, prefix string) []Candidate {
-	seen := make(map[string]bool, len(cands))
-	out := cands[:0]
+	matched := make([]Candidate, 0, len(cands))
 	for _, c := range cands {
-		if !strings.HasPrefix(c.Text, prefix) || seen[c.Text] {
+		if strings.HasPrefix(c.Text, prefix) {
+			matched = append(matched, c)
+		}
+	}
+
+	fuzzy := len(matched) == 0 && prefix != ""
+	scores := map[string]int{}
+	if fuzzy {
+		for _, c := range cands {
+			if s, ok := fuzzyScore(c.Text, prefix); ok {
+				matched = append(matched, c)
+				if s > scores[c.Text] {
+					scores[c.Text] = s
+				}
+			}
+		}
+	}
+
+	seen := make(map[string]bool, len(matched))
+	out := matched[:0]
+	for _, c := range matched {
+		if seen[c.Text] {
 			continue
 		}
 		seen[c.Text] = true
 		out = append(out, c)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Text < out[j].Text })
+
+	if fuzzy {
+		// Best fuzzy score first; ties broken alphabetically for stability.
+		sort.SliceStable(out, func(i, j int) bool {
+			if si, sj := scores[out[i].Text], scores[out[j].Text]; si != sj {
+				return si > sj
+			}
+			return out[i].Text < out[j].Text
+		})
+	} else {
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Text < out[j].Text })
+	}
 	return out
+}
+
+// fuzzyScore reports whether pattern matches text as a case-insensitive
+// subsequence and, if so, a score where higher is a better match. Matches that
+// are contiguous and near the start of the text score highest; shorter
+// candidates are mildly preferred. It returns (0, false) when pattern is not a
+// subsequence of text.
+func fuzzyScore(text, pattern string) (int, bool) {
+	pat := []rune(strings.ToLower(pattern))
+	if len(pat) == 0 {
+		return 0, true
+	}
+	txt := []rune(strings.ToLower(text))
+
+	score, pi, prev := 0, 0, -2
+	for ti := 0; ti < len(txt) && pi < len(pat); ti++ {
+		if txt[ti] != pat[pi] {
+			continue
+		}
+		if ti == prev+1 {
+			score += 6 // contiguous with the previous match
+		}
+		if ti == 0 {
+			score += 8 // anchored at the start of the candidate
+		}
+		score -= ti / 4 // earlier matches are mildly better
+		prev = ti
+		pi++
+	}
+	if pi < len(pat) {
+		return 0, false // not all of pattern was found in order
+	}
+	score -= len(txt) / 8 // prefer shorter, denser candidates
+	return score, true
 }

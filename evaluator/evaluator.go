@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"ravenshell/ansi"
 	"ravenshell/ast"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -61,14 +62,15 @@ func asControl(err error) (*controlSignal, bool) {
 
 // Evaluator executes AST nodes
 type Evaluator struct {
-	cwd         string                            // Current working directory
-	env         map[string]string                 // Environment variables (for $VAR)
-	vars        map[string]Value                  // Global script variables (== scopes[0])
-	scopes      []map[string]Value                // Variable scope chain; innermost is last
-	funcs       map[string]*ast.FunctionStatement // User-defined functions
-	searchPaths []string                          // Extra executable search dirs (raven-add path)
-	stdout      io.Writer                         // Standard output (for redirections)
-	stdin       io.Reader                         // Standard input (for redirections)
+	cwd          string                            // Current working directory
+	env          map[string]string                 // Environment variables (for $VAR)
+	vars         map[string]Value                  // Global script variables (== scopes[0])
+	scopes       []map[string]Value                // Variable scope chain; innermost is last
+	funcs        map[string]*ast.FunctionStatement // User-defined functions
+	searchPaths  []string                          // Extra executable search dirs (raven-add path)
+	defaultPaths []string                          // Standard system executable dirs for this OS
+	stdout       io.Writer                         // Standard output (for redirections)
+	stdin        io.Reader                         // Standard input (for redirections)
 
 	lastStatus int // exit status of the last command ($?)
 
@@ -99,8 +101,66 @@ func New() *Evaluator {
 		stdin:     os.Stdin,
 		nextJobID: 1,
 	}
+	e.defaultPaths = defaultExecPaths()
 	e.loadSearchPaths()
 	return e
+}
+
+// defaultExecPaths returns the standard system executable directories for the
+// host OS, plus common per-user bin dirs that exist. They are always searched
+// (and merged into a child's PATH) so basic tools resolve without the user
+// having to `raven-add path` standard locations like /usr/bin or
+// /opt/homebrew/bin. Only directories that exist are returned.
+func defaultExecPaths() []string {
+	var candidates []string
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = []string{
+			"/opt/homebrew/bin", "/opt/homebrew/sbin",
+			"/usr/local/bin", "/usr/local/sbin",
+			"/usr/bin", "/bin", "/usr/sbin", "/sbin",
+		}
+	default: // linux and other unix-likes
+		candidates = []string{
+			"/usr/local/sbin", "/usr/local/bin",
+			"/usr/sbin", "/usr/bin",
+			"/sbin", "/bin",
+		}
+	}
+	// Common per-user tool directories.
+	if home, err := os.UserHomeDir(); err == nil {
+		for _, sub := range []string{".local/bin", "go/bin", ".cargo/bin", ".bun/bin"} {
+			candidates = append(candidates, filepath.Join(home, sub))
+		}
+	}
+
+	var dirs []string
+	for _, dir := range candidates {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
+}
+
+// composePath joins ordered groups of directories into a single PATH value,
+// dropping empty entries and duplicates while preserving first-seen order.
+func composePath(groups ...[]string) string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, group := range groups {
+		for _, dir := range group {
+			if dir == "" {
+				continue
+			}
+			if _, ok := seen[dir]; ok {
+				continue
+			}
+			seen[dir] = struct{}{}
+			out = append(out, dir)
+		}
+	}
+	return strings.Join(out, string(os.PathListSeparator))
 }
 
 // Interrupt marks evaluation as interrupted (called from a SIGINT handler).
@@ -569,7 +629,22 @@ func (e *Evaluator) lookPath(name string) (string, error) {
 			return candidate, nil
 		}
 	}
-	return exec.LookPath(name)
+
+	// Try the inherited system PATH next.
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	} else {
+		// Fall back to the standard system directories so common tools resolve
+		// even when the inherited PATH is minimal or empty (e.g. when the shell
+		// is launched from a GUI with a stripped-down environment).
+		for _, dir := range e.defaultPaths {
+			candidate := filepath.Join(dir, name)
+			if isExecutableFile(candidate) {
+				return candidate, nil
+			}
+		}
+		return "", err
+	}
 }
 
 // isExecutableFile reports whether path is a regular file with an execute bit.
@@ -582,8 +657,10 @@ func isExecutableFile(path string) bool {
 }
 
 // buildEnv merges the process environment with shell-local variables and the
-// extra search paths (prepended to PATH) so external commands see both
-// inherited and user-set ($VAR) values plus any raven-add path directories.
+// executable search paths so external commands see both inherited and user-set
+// ($VAR) values, any raven-add path directories (prepended to PATH), and the OS
+// default directories (appended) so basic tools resolve even when the inherited
+// PATH is minimal.
 func (e *Evaluator) buildEnv() []string {
 	merged := make(map[string]string)
 	for _, kv := range os.Environ() {
@@ -592,14 +669,10 @@ func (e *Evaluator) buildEnv() []string {
 		}
 	}
 	maps.Copy(merged, e.env)
-	if len(e.searchPaths) > 0 {
-		extra := strings.Join(e.searchPaths, string(os.PathListSeparator))
-		if existing := merged["PATH"]; existing != "" {
-			merged["PATH"] = extra + string(os.PathListSeparator) + existing
-		} else {
-			merged["PATH"] = extra
-		}
-	}
+	// Compose PATH as: raven-add dirs, then the inherited PATH, then the OS
+	// default dirs. The defaults guarantee basic tools are reachable even when
+	// the inherited PATH is minimal, without the user adding them by hand.
+	merged["PATH"] = composePath(e.searchPaths, filepath.SplitList(merged["PATH"]), e.defaultPaths)
 
 	env := make([]string, 0, len(merged))
 	for k, v := range merged {
@@ -1172,6 +1245,7 @@ func (e *Evaluator) scanExecutables() []string {
 	set := make(map[string]bool)
 	dirs := append([]string{}, e.searchPaths...)
 	dirs = append(dirs, filepath.SplitList(os.Getenv("PATH"))...)
+	dirs = append(dirs, e.defaultPaths...)
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {

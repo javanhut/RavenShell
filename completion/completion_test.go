@@ -271,6 +271,55 @@ func TestHelpCommandCompletesBuiltins(t *testing.T) {
 	}
 }
 
+// TestFuzzyFallback verifies the light fuzzy fallback: an exact prefix match is
+// always preferred, but when the typed word matches nothing as a prefix it
+// falls back to a case-insensitive subsequence match on file/dir names.
+func TestFuzzyFallback(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "alpha.txt"), "x")
+	mustWrite(t, filepath.Join(dir, "component.go"), "x")
+	if err := os.Mkdir(filepath.Join(dir, "Downloads"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	e := newTestEngine(dir)
+
+	// Exact prefix still wins and the fuzzy path does not engage.
+	if got := e.Complete("someprog al", 11); len(got) != 1 || got[0].Text != "alpha.txt" {
+		t.Fatalf("Complete(someprog al) = %v, want [alpha.txt] (exact prefix)", texts(got))
+	}
+
+	// No prefix match: 'dwn' subsequence-matches Downloads/.
+	if got := e.Complete("someprog dwn", 12); !contains(got, "Downloads/") {
+		t.Errorf("Complete(someprog dwn) = %v, want it to fuzzy-match Downloads/", texts(got))
+	}
+
+	// No prefix match: 'cmp' subsequence-matches component.go.
+	if got := e.Complete("someprog cmp", 12); !contains(got, "component.go") {
+		t.Errorf("Complete(someprog cmp) = %v, want it to fuzzy-match component.go", texts(got))
+	}
+
+	// A pattern that is not a subsequence of anything matches nothing.
+	if got := e.Complete("someprog zzz", 12); len(got) != 0 {
+		t.Errorf("Complete(someprog zzz) = %v, want no matches", texts(got))
+	}
+}
+
+// TestFuzzyScore checks the subsequence matcher and its ordering preferences.
+func TestFuzzyScore(t *testing.T) {
+	if _, ok := fuzzyScore("Downloads", "dwn"); !ok {
+		t.Error("'dwn' should be a subsequence of 'Downloads'")
+	}
+	if _, ok := fuzzyScore("Downloads", "dnw"); ok {
+		t.Error("'dnw' is out of order and must not match 'Downloads'")
+	}
+	// An earlier/contiguous match scores higher than a scattered one.
+	anchored, _ := fuzzyScore("config", "con")
+	scattered, _ := fuzzyScore("reconfigure", "con")
+	if anchored <= scattered {
+		t.Errorf("anchored match score %d should beat scattered %d", anchored, scattered)
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {

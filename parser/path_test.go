@@ -151,6 +151,46 @@ func TestDigitLeadingFilenameQuotedWorkaround(t *testing.T) {
 	}
 }
 
+// TestColonAndAtWords is the regression guard for the bug where ':' (and '@')
+// lexed as an ILLEGAL token, so words like image:tag or a docker reference like
+// ravenlinux-build-minimal:latest aborted parsing with "no prefix parse
+// function for ILLEGAL found". Each input must stay a single argument whose
+// value is unchanged.
+func TestColonAndAtWords(t *testing.T) {
+	cases := []string{
+		// Image references / tags.
+		"image:tag",
+		"nginx:latest",
+		"ravenlinux-build-minimal:latest", // the originally reported case
+		// Host:port and numeric port mappings.
+		"localhost:8080",
+		"8080:80",
+		"db.local:5432", // dotted host with a colon port
+		// (A bare-IP "127.0.0.1:5432" instead splits on the leading-digit
+		// dotted-name limitation — see TestDigitLeadingFilenameQuotedWorkaround.)
+		// URLs (scheme://host/path joins through the path machinery).
+		"http://example.com",
+		"https://example.com/a/b",
+		// scp-style and at-references.
+		"git@github.com:user/repo.git",
+		"user@host",
+		"@scope/pkg",
+		// Volume-mount style with a colon between paths.
+		"/host:/container",
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			args := parseArgs(t, in)
+			if len(args) != 1 {
+				t.Fatalf("%q parsed into %d arguments, want 1: %v", in, len(args), argStrings(args))
+			}
+			if got := args[0].String(); got != in {
+				t.Errorf("arg value = %q, want %q", got, in)
+			}
+		})
+	}
+}
+
 func argStrings(args []ast.Expression) []string {
 	out := make([]string, len(args))
 	for i, a := range args {

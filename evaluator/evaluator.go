@@ -279,7 +279,12 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 		}
 		return node.Value, nil
 	case *ast.PathExpression:
-		return e.resolvePath(node.Value), nil
+		// A path used as a command argument is passed through verbatim, with
+		// only ~ expanded. Rewriting "." or a relative path to an absolute one
+		// here breaks external commands that treat "." specially (e.g. tools
+		// whose "stage everything" path differs from staging a named dir).
+		// Builtins re-resolve their own args against e.cwd via resolvePath.
+		return e.expandTilde(node.Value), nil
 	case *ast.StringLiteral:
 		if node.Interpolate {
 			return e.interpolate(node.Value), nil
@@ -1204,28 +1209,35 @@ func (e *Evaluator) evalCommandSubstitution(node *ast.CommandSubstitution) (Valu
 
 // Helper functions
 
+// expandTilde expands a leading ~ or ~/ to the user's home directory and
+// returns every other path unchanged. This is the only rewriting a shell
+// performs on a path argument before handing it to an external command: ~ is
+// the shell's responsibility, but ".", "..", and relative paths must reach the
+// child verbatim so it resolves them against its own working directory.
+func (e *Evaluator) expandTilde(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	} else if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
+// resolvePath turns a path argument into an absolute, cleaned path rooted at
+// the shell's current directory. Builtins use this because the shell tracks its
+// own cwd (e.cwd) instead of calling os.Chdir, so a bare "." or "foo" must be
+// joined with e.cwd rather than the process working directory.
 func (e *Evaluator) resolvePath(path string) string {
 	if len(path) == 0 {
 		return e.cwd
 	}
 
-	// Expand ~ to home directory
-	if path == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return e.cwd
-		}
-		return home
-	}
-	if len(path) >= 2 && path[:2] == "~/" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return filepath.Clean(filepath.Join(e.cwd, path))
-		}
-		return filepath.Clean(filepath.Join(home, path[2:]))
-	}
+	path = e.expandTilde(path)
 
-	// Absolute path
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
 	}

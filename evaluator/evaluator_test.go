@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"ravenshell/ast"
 	"ravenshell/lexer"
 	"ravenshell/parser"
 	"slices"
@@ -187,6 +188,50 @@ func TestCommandSubstitutionInExpression(t *testing.T) {
 	e, _ := run(t, `r = $(print "ab") + "cd"`)
 	if got := e.vars["r"]; got != "abcd" {
 		t.Errorf("r = %q, want abcd", got)
+	}
+}
+
+// TestPathArgPassedVerbatim guards the fix for `ivaldi gather .`: a "." or
+// relative path used as a command argument must reach external programs
+// unchanged (only ~ is expanded). Rewriting it to an absolute cwd path broke
+// tools that treat a literal "." specially.
+func TestPathArgPassedVerbatim(t *testing.T) {
+	e := New()
+	e.cwd = "/tmp/somewhere"
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+
+	cases := []struct{ in, want string }{
+		{".", "."},
+		{"..", ".."},
+		{"./a.txt", "./a.txt"},
+		{"sub/file.go", "sub/file.go"},
+		{"/abs/path", "/abs/path"},
+		{"~/x", filepath.Join(home, "x")},
+	}
+	for _, tc := range cases {
+		val, err := e.evalExpressionValue(&ast.PathExpression{Value: tc.in})
+		if err != nil {
+			t.Fatalf("evalExpressionValue(%q): %v", tc.in, err)
+		}
+		if got := e.valueToString(val); got != tc.want {
+			t.Errorf("path arg %q => %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestResolvePathJoinsCwd confirms the other half: builtins still resolve their
+// path args against the shell's tracked cwd (the shell never calls os.Chdir).
+func TestResolvePathJoinsCwd(t *testing.T) {
+	e := New()
+	e.cwd = "/tmp/work"
+	if got := e.resolvePath("."); got != "/tmp/work" {
+		t.Errorf(`resolvePath(".") = %q, want /tmp/work`, got)
+	}
+	if got := e.resolvePath("a.txt"); got != "/tmp/work/a.txt" {
+		t.Errorf(`resolvePath("a.txt") = %q, want /tmp/work/a.txt`, got)
 	}
 }
 

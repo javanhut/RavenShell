@@ -71,6 +71,19 @@ func (l *Lexer) skipWhitespaceAndComments() (sawWhitespace, sawNewline bool) {
 			for l.peek() != '\n' && l.peek() != 0 {
 				l.advance()
 			}
+		} else if ch == '\\' && (l.peekNext() == '\n' || l.peekNext() == '\r' || l.peekNext() == 0) {
+			// A backslash at end of line (or end of input) is a line
+			// continuation: splice the next line onto this one. It counts as
+			// whitespace but NOT a newline, so it does not terminate a command's
+			// argument list — `echo a \<newline> b` is the single command `echo a b`.
+			sawWhitespace = true
+			l.advance() // consume '\'
+			if l.peek() == '\r' {
+				l.advance()
+			}
+			if l.peek() == '\n' {
+				l.advance()
+			}
 		} else {
 			return sawWhitespace, sawNewline
 		}
@@ -91,6 +104,10 @@ func (l *Lexer) scanToken() token.Token {
 		return token.Token{Type: token.PIPE, Literal: string(l.advance())}
 	case ';':
 		return token.Token{Type: token.SEMICOLON, Literal: string(l.advance())}
+	case ':':
+		return token.Token{Type: token.COLON, Literal: string(l.advance())}
+	case '@':
+		return token.Token{Type: token.AT, Literal: string(l.advance())}
 	case '&':
 		if l.peekNext() == '&' {
 			start := l.pos

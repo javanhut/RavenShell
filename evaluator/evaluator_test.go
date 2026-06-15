@@ -387,3 +387,31 @@ func TestExternalCommandVariableFallback(t *testing.T) {
 		t.Errorf("fallback value = %q, want 42", out)
 	}
 }
+
+// TestExternalArgsNotAbsolutized verifies that path-like arguments to an
+// external command are passed verbatim (relative paths stay relative, URLs and
+// scp-style remotes are untouched) while a leading '~' is still expanded. The
+// child process inherits the shell's cwd, so absolutizing relative paths is both
+// unnecessary and surprising.
+func TestExternalArgsNotAbsolutized(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"echo ./build/output", "./build/output"},
+		{"echo src/main.go", "src/main.go"},
+		{"echo https://github.com/javanhut/RavenShell.git", "https://github.com/javanhut/RavenShell.git"},
+		{"echo git@github.com:javanhut/RavenShell.git", "git@github.com:javanhut/RavenShell.git"},
+		{"echo ~/foo", filepath.Join(home, "foo")},
+	}
+	for _, c := range cases {
+		_, out := run(t, c.src)
+		if got := strings.TrimSpace(out); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.src, got, c.want)
+		}
+	}
+}

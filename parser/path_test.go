@@ -66,6 +66,18 @@ func TestSinglePathArgument(t *testing.T) {
 		"my-file.txt",
 		"docker-compose.yml",
 		"some-dir/another-file.tar.gz",
+
+		// URLs — the ':' must glue onto the surrounding word so the whole URL
+		// stays a single argument (regression: ':' used to lex as ILLEGAL).
+		"https://github.com/javanhut/RavenShell.git",
+		"http://example.com",
+		"https://example.com:8080/path",
+
+		// scp-style remotes — the '@' must glue too (regression: '@' used to lex
+		// as ILLEGAL).
+		"git@github.com:javanhut/RavenShell.git",
+		"ssh://git@host.example.com/repo.git",
+		"user@host:8080/path",
 	}
 
 	for _, in := range cases {

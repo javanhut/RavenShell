@@ -322,8 +322,10 @@ func (p *Parser) parseIdentifierOrCommand() ast.Expression {
 	}
 
 	// Check if this identifier is directly followed (no space) by path tokens
-	// (e.g., file.txt, foo/bar). A space means a separate argument.
-	if (p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP)) && !p.peekToken.PrecededByWhitespace {
+	// (e.g., file.txt, foo/bar), a ':' (a URL scheme like https://...), or a '@'
+	// (an scp-style remote like git@host:repo.git). A space means a separate
+	// argument.
+	if (p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP) || p.peekTokenIs(token.COLON) || p.peekTokenIs(token.AT)) && !p.peekToken.PrecededByWhitespace {
 		path := p.parsePathFromIdent()
 		if cmdPos {
 			// e.g. ./script.sh or bin/tool at the start of a statement
@@ -489,13 +491,15 @@ func (p *Parser) isArgumentToken(tt token.TokenType) bool {
 
 // isPathContinuation reports whether tok can extend a path it is glued to with
 // no intervening whitespace. Beyond identifiers, dots, and slashes, this also
-// covers integer segments (so v1.2.3.tgz stays whole) and reserved words (so
-// path segments may legitimately be named env, output, print, in, ...: e.g.
-// dir/output.go, .env.local, lib/print.txt). Without this, any path segment
-// that happens to be a keyword or a number would split the path.
+// covers integer segments (so v1.2.3.tgz stays whole), colons and at-signs (so
+// URLs like https://host/path and scp-style remotes like git@host:repo.git stay
+// whole), and reserved words (so path segments may legitimately be named env,
+// output, print, in, ...: e.g. dir/output.go, .env.local, lib/print.txt).
+// Without this, any path segment that happens to be a keyword or a number would
+// split the path.
 func (p *Parser) isPathContinuation(tok token.Token) bool {
 	switch tok.Type {
-	case token.IDENT, token.INTEGER, token.FULLSTOP, token.FSLASH:
+	case token.IDENT, token.INTEGER, token.FULLSTOP, token.FSLASH, token.COLON, token.AT:
 		return true
 	}
 	// A token whose literal maps back to its own type is a reserved word

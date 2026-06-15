@@ -376,7 +376,7 @@ func (e *Evaluator) valueToBool(val Value) bool {
 
 func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
 	// Evaluate arguments (array-valued arguments are splatted into multiple args)
-	args, err := e.evalArgs(cmd.Arguments)
+	args, err := e.evalArgs(cmd.Arguments, cmd.Type == ast.CMD_EXTERNAL)
 	if err != nil {
 		return "", err
 	}
@@ -397,10 +397,15 @@ func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
 
 // evalArgs evaluates command argument expressions, splatting array values into
 // multiple string arguments (so glob(...) and arrays expand naturally).
-func (e *Evaluator) evalArgs(arguments []ast.Expression) ([]string, error) {
+//
+// When external is true the arguments are for an external program: path
+// arguments are passed verbatim (only '~' is expanded) rather than being
+// resolved to an absolute path. The child process inherits the shell's working
+// directory, so a relative path like ./build or a URL stays exactly as written.
+func (e *Evaluator) evalArgs(arguments []ast.Expression, external bool) ([]string, error) {
 	var args []string
 	for _, arg := range arguments {
-		val, err := e.evalExpressionValue(arg)
+		val, err := e.evalArg(arg, external)
 		if err != nil {
 			return nil, err
 		}
@@ -413,6 +418,19 @@ func (e *Evaluator) evalArgs(arguments []ast.Expression) ([]string, error) {
 		}
 	}
 	return args, nil
+}
+
+// evalArg evaluates a single command argument. For external commands a path
+// argument is expanded only for a leading '~' and otherwise passed through
+// verbatim, so relative paths (./build) and URLs (https://...) reach the
+// program exactly as the user wrote them instead of being absolutized.
+func (e *Evaluator) evalArg(arg ast.Expression, external bool) (Value, error) {
+	if external {
+		if pe, ok := arg.(*ast.PathExpression); ok {
+			return e.expandHome(pe.Value), nil
+		}
+	}
+	return e.evalExpressionValue(arg)
 }
 
 func (e *Evaluator) dispatchCommand(cmd *ast.Command, args []string) (string, error) {
@@ -1187,9 +1205,33 @@ func (e *Evaluator) evalCommandSubstitution(node *ast.CommandSubstitution) (Valu
 
 // Helper functions
 
+// expandHome expands a leading '~' or '~/...' to the user's home directory and
+// returns any other path unchanged. Unlike resolvePath it does not join with the
+// working directory, so relative paths and URLs are left exactly as written.
+func (e *Evaluator) expandHome(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		if path == "~" {
+			return home
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
+
 func (e *Evaluator) resolvePath(path string) string {
 	if len(path) == 0 {
 		return e.cwd
+	}
+
+	// A URL (scheme://...) is not a filesystem path; return it verbatim so
+	// path cleaning does not collapse the "//" (e.g. https://github.com would
+	// otherwise become https:/github.com).
+	if strings.Contains(path, "://") {
+		return path
 	}
 
 	// Expand ~ to home directory

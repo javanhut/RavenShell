@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -65,6 +66,12 @@ type Readline struct {
 	cwd             func() string   // Function to get current working directory
 	commandProvider func() []string // Dynamic command names (functions, PATH executables)
 	cprDisabled     bool            // true once the terminal proves it ignores Cursor Position Reports
+
+	// Multi-line redraw bookkeeping. The editable region (prompt + line +
+	// autosuggestion) can wrap across several terminal rows; draw uses these to
+	// clear every row the previous render occupied before reprinting.
+	oldpos  int // cursor offset within line at the previous draw
+	maxrows int // most physical rows the current line has used
 }
 
 // New creates a new Readline instance
@@ -203,9 +210,11 @@ func (r *Readline) ReadLine() (string, error) {
 	// newline), move to a fresh line so the prompt always starts at column 1.
 	r.ensureFreshLine()
 
-	// Print prompt
+	// Print the prompt. The editable region is freshly positioned at the start
+	// of its row, so reset the multi-line bookkeeping and let draw render it.
 	r.printPromptHead()
-	fmt.Print(r.prompt)
+	r.resetDrawState()
+	r.refresh(line, pos)
 
 	buf := make([]byte, 3)
 	for {
@@ -298,7 +307,7 @@ func (r *Readline) ReadLine() (string, error) {
 		case keyCtrlL: // Clear screen
 			fmt.Print("\033[2J\033[H")
 			r.printPromptHead()
-			fmt.Print(r.prompt)
+			r.resetDrawState()
 			r.refresh(line, pos)
 
 		case keyTab:
@@ -319,7 +328,7 @@ func (r *Readline) ReadLine() (string, error) {
 				} else {
 					r.printCandidates(completions)
 					r.printPromptHead()
-					fmt.Print(r.prompt)
+					r.resetDrawState()
 					r.refresh(line, pos)
 				}
 			}
@@ -572,27 +581,155 @@ func (r *Readline) refresh(line []rune, pos int) {
 	r.draw(line, pos, suggestion)
 }
 
-// draw clears the current line and redraws the prompt, the line, and the dim
-// tail of an optional autosuggestion, leaving the cursor at pos.
+// resetDrawState clears the multi-line redraw bookkeeping. Call it whenever the
+// editable region is freshly positioned at the start of its row with nothing of
+// the line yet on screen (start of a read, after Ctrl-L, after a completion
+// listing), so the next draw does not try to clear rows that aren't there.
+func (r *Readline) resetDrawState() {
+	r.oldpos = 0
+	r.maxrows = 1
+}
+
+// suggestionTail returns the part of the autosuggestion beyond what is already
+// typed (empty when there is no suggestion).
+func suggestionTail(line []rune, suggestion string) []rune {
+	if suggestion != "" && len(suggestion) > len(line) {
+		return []rune(suggestion)[len(line):]
+	}
+	return nil
+}
+
+// draw redraws the editable region (prompt + line + dim autosuggestion tail) in
+// place, leaving the cursor at pos within line. It correctly handles the case
+// where the rendered text wraps across several terminal rows.
+//
+// A naive "\r\033[K" redraw only clears the cursor's current physical row, so a
+// line wide enough to wrap walks down the screen leaving a stale copy on every
+// keystroke. This follows linenoise's multi-line refresh: walk up from the
+// cursor's previous row clearing every row the last render used, reprint from
+// the top, then move the cursor down and across to pos.
 func (r *Readline) draw(line []rune, pos int, suggestion string) {
-	// Move to beginning of line and clear it.
-	fmt.Print("\r")
-	fmt.Print("\033[K")
+	cols, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || cols <= 0 {
+		// No usable width (e.g. stdout redirected): fall back to a single-row
+		// redraw, which is correct whenever the content fits one row.
+		r.drawSingleLine(line, pos, suggestion)
+		return
+	}
+	fmt.Print(r.renderEscapes(cols, line, pos, suggestion))
+}
+
+// renderEscapes builds the escape sequence that redraws the editable region on a
+// terminal cols wide and advances the multi-line bookkeeping. It is split out of
+// draw so the wrap math can be tested against a terminal model without a tty.
+func (r *Readline) renderEscapes(cols int, line []rune, pos int, suggestion string) string {
+	plen := displayWidth(r.prompt)
+	tail := suggestionTail(line, suggestion)
+	blen := len(line) + len(tail) // displayed cells after the prompt
+
+	var b strings.Builder
+
+	// Rows the new render needs, and the cursor's row within the previous render.
+	rows := (plen + blen + cols - 1) / cols
+	if rows < 1 {
+		rows = 1
+	}
+	rpos := (plen + r.oldpos + cols) / cols
+	oldRows := r.maxrows
+	if rows > r.maxrows {
+		r.maxrows = rows
+	}
+
+	// 1) Go to the last row the previous render used.
+	if oldRows-rpos > 0 {
+		fmt.Fprintf(&b, "\033[%dB", oldRows-rpos)
+	}
+	// 2) Clear each row from the bottom up, then 3) clear the top row.
+	for j := 0; j < oldRows-1; j++ {
+		b.WriteString("\r\033[0K\033[1A")
+	}
+	b.WriteString("\r\033[0K")
+
+	// 4) Reprint prompt, line, and the dim suggestion tail.
+	b.WriteString(r.prompt)
+	b.WriteString(string(line))
+	if len(tail) > 0 {
+		b.WriteString(ansi.BrightBlk)
+		b.WriteString(string(tail))
+		b.WriteString(ansi.Reset)
+	}
+
+	// 5) If the cursor is at the very end of the buffer and lands exactly at
+	// column 0 of a fresh row, emit a newline so the terminal scrolls and the
+	// cursor has a row to occupy.
+	if pos == blen && pos != 0 && (pos+plen)%cols == 0 {
+		b.WriteString("\n\r")
+		rows++
+		if rows > r.maxrows {
+			r.maxrows = rows
+		}
+	}
+
+	// 6) Move the cursor up to its target row, then across to its column.
+	rpos2 := (plen + pos + cols) / cols
+	if rows-rpos2 > 0 {
+		fmt.Fprintf(&b, "\033[%dA", rows-rpos2)
+	}
+	if col := (plen + pos) % cols; col > 0 {
+		fmt.Fprintf(&b, "\r\033[%dC", col)
+	} else {
+		b.WriteString("\r")
+	}
+
+	r.oldpos = pos
+	return b.String()
+}
+
+// drawSingleLine is the width-unaware fallback used when the terminal size is
+// unavailable. It clears the current row and reprints; correct when the content
+// fits on one row.
+func (r *Readline) drawSingleLine(line []rune, pos int, suggestion string) {
+	fmt.Print("\r\033[K")
 	fmt.Print(r.prompt)
 	fmt.Print(string(line))
 
-	// Draw the part of the suggestion beyond what's already typed, dimmed.
-	var tail []rune
-	if suggestion != "" && len(suggestion) > len(line) {
-		tail = []rune(suggestion)[len(line):]
+	tail := suggestionTail(line, suggestion)
+	if len(tail) > 0 {
 		fmt.Print(ansi.BrightBlk + string(tail) + ansi.Reset)
 	}
 
-	// Move the cursor back from the end of everything drawn to pos.
-	end := len(line) + len(tail)
-	if end > pos {
+	if end := len(line) + len(tail); end > pos {
 		fmt.Printf("\033[%dD", end-pos)
 	}
+}
+
+// displayWidth returns the number of terminal cells s occupies, ignoring ANSI
+// escape sequences (color codes in the prompt have zero width) and counting
+// every other rune as one cell. The editable line is ASCII, so single-width
+// counting is sufficient.
+func displayWidth(s string) int {
+	w := 0
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b { // ESC: skip the escape sequence
+			i++
+			if i < len(s) && s[i] == '[' { // CSI: ESC [ ... final byte 0x40-0x7e
+				i++
+				for i < len(s) && (s[i] < 0x40 || s[i] > 0x7e) {
+					i++
+				}
+				if i < len(s) {
+					i++ // consume the final byte
+				}
+			} else if i < len(s) {
+				i++ // two-byte escape: skip the following byte
+			}
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		w++
+	}
+	return w
 }
 
 // complete returns completions for the current input

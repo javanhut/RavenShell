@@ -54,6 +54,8 @@ func TestAllCommands(t *testing.T) {
 		{"mkfile", ast.CMD_MAKEFILE, "mkfile"},
 		{"output", ast.CMD_OUTPUT, "output"},
 		{"print", ast.CMD_PRINT, "print"},
+		{"raven-add", ast.CMD_RAVENADD, "raven-add"},
+		{"raven-update", ast.CMD_RAVENUPDATE, "raven-update"},
 	}
 
 	for _, tt := range tests {

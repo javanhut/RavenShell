@@ -111,6 +111,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.ENV, p.parseCommandKeyword)
 	p.registerPrefix(token.RAVENADD, p.parseCommandKeyword)
 	p.registerPrefix(token.RAVENHELP, p.parseHelpCommand)
+	p.registerPrefix(token.RAVENUPDATE, p.parseCommandKeyword)
 	p.registerPrefix(token.PS, p.parseCommandKeyword)
 	p.registerPrefix(token.KILL, p.parseCommandKeyword)
 	p.registerPrefix(token.KILLALL, p.parseCommandKeyword)
@@ -749,6 +750,8 @@ func tokenTypeToCommandType(tt token.TokenType) ast.CommandType {
 		return ast.CMD_RAVENADD
 	case token.RAVENHELP:
 		return ast.CMD_RAVENHELP
+	case token.RAVENUPDATE:
+		return ast.CMD_RAVENUPDATE
 	case token.PS:
 		return ast.CMD_PS
 	case token.KILL:

@@ -160,3 +160,41 @@ func TestApplyCompletionSpace(t *testing.T) {
 		t.Errorf("dir completion = %q, want \"cd src/\"", string(line))
 	}
 }
+
+// TestDisplayWidth covers the ANSI-aware width used to compute how many rows the
+// wrapped prompt+line occupy. Color codes must contribute zero cells.
+func TestDisplayWidth(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"plain ascii", "hello", 5},
+		{"empty", "", 0},
+		{"single color code", "\033[32mgreen\033[0m", 5},
+		{"realistic prompt", "[\033[32mjavanhutchinson\033[0m@\033[34mlinux\033[0m] > ", 26},
+		{"only escapes", "\033[1m\033[0m", 0},
+		{"bare two-byte escape", "\033Mx", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := displayWidth(tc.in); got != tc.want {
+				t.Errorf("displayWidth(%q) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSuggestionTail returns only the portion of an autosuggestion beyond what
+// is already typed, so draw renders just the dim remainder.
+func TestSuggestionTail(t *testing.T) {
+	if got := suggestionTail([]rune("git "), "git status"); string(got) != "status" {
+		t.Errorf("suggestionTail = %q, want \"status\"", string(got))
+	}
+	if got := suggestionTail([]rune("ls"), ""); got != nil {
+		t.Errorf("suggestionTail with no suggestion = %q, want nil", string(got))
+	}
+	if got := suggestionTail([]rune("git status"), "git status"); got != nil {
+		t.Errorf("suggestionTail with equal-length suggestion = %q, want nil", string(got))
+	}
+}

@@ -518,6 +518,8 @@ func (e *Evaluator) dispatchCommand(cmd *ast.Command, args []string) (string, er
 		return e.execRavenAdd(args)
 	case ast.CMD_RAVENHELP:
 		return e.execRavenHelp(args)
+	case ast.CMD_RAVENUPDATE:
+		return e.execRavenUpdate(args)
 	case ast.CMD_PS:
 		return e.execPs(args)
 	case ast.CMD_KILL:

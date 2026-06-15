@@ -22,6 +22,12 @@ import (
 // -ldflags "-X main.version=v1.2.3".
 var version = "dev"
 
+// sourceDir is the absolute path of the source tree this binary was built
+// from, stamped in by install.sh / the Makefile with
+// -ldflags "-X main.sourceDir=<path>". It lets `raven-update` find the source
+// to rebuild from without searching. Empty for ad-hoc `go build`.
+var sourceDir = ""
+
 const usage = `RavenShell - a command-line interpreter and scripting language.
 
 Usage:
@@ -51,6 +57,11 @@ func colorize(code, s string) string {
 }
 
 func main() {
+	// Hand build metadata to the evaluator so `raven-update` can report the
+	// running version and find the source tree it was built from.
+	evaluator.BuildVersion = version
+	evaluator.BuildSourceDir = sourceDir
+
 	args := os.Args[1:]
 	script := ""
 

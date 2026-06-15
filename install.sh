@@ -17,10 +17,12 @@ fi
 
 # Build from the directory containing this script.
 cd "$(dirname "$0")"
+SRCDIR="$(pwd)"
 
 echo "Building $BINARY..."
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
-go build -ldflags "-X main.version=$VERSION" -o "$BINARY" .
+# Stamp in the source dir so `raven-update` can rebuild from here later.
+go build -ldflags "-X main.version=$VERSION -X main.sourceDir=$SRCDIR" -o "$BINARY" .
 
 # Choose a writable install directory, falling back to sudo then ~/.local/bin.
 use_sudo=0

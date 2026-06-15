@@ -46,6 +46,8 @@ var helpEntries = []helpEntry{
 	{name: "killall", usage: "killall <name> [signal]", summary: "Signal every process whose name matches.", group: "Processes"},
 	{name: "jobs", usage: "jobs", summary: "List background jobs started with '&'.", group: "Processes"},
 
+	{name: "raven-update", usage: "raven-update [--check]", summary: "Rebuild RavenShell from source and replace the running binary in place.", group: "Maintenance"},
+
 	{name: "raven-help", aliases: []string{"help"}, usage: "raven-help [command]", summary: "List built-in commands, or show detailed help for one.", group: "Help"},
 }
 
@@ -55,6 +57,7 @@ var groupOrder = []string{
 	"Output",
 	"Environment",
 	"Processes",
+	"Maintenance",
 	"Help",
 }
 

@@ -21,42 +21,43 @@ type Token struct {
 
 const (
 	// KEYWORDS
-	EOF        TokenType = "EOF"
-	ILLEGAL    TokenType = "ILLEGAL"
-	LIST       TokenType = "LIST"
-	REMOVE     TokenType = "REMOVE"
-	CHANGEDIR  TokenType = "CHANGEDIR"
-	REMOVEDIR  TokenType = "REMOVEDIR"
-	MAKEDIR    TokenType = "MAKEDIR"
-	WHOAMI     TokenType = "WHOAMI"
-	CURRENTDIR TokenType = "CURRENTDIR"
-	MAKEFILE   TokenType = "MAKEFILE"
-	OUTPUT     TokenType = "OUTPUT"
-	IDENT      TokenType = "IDENTIFER"
-	INTEGER    TokenType = "INTEGER"
-	STRING     TokenType = "STRING"
-	FLAG       TokenType = "FLAG"       // command flag like -l, --all, --max=5
-	LASTSTATUS TokenType = "LASTSTATUS" // $? - exit status of the last command
-	PIPE       TokenType = "PIPE"
-	DOLLAR     TokenType = "DOLLAR"
-	PRINT      TokenType = "PRINT"
-	SHOW       TokenType = "SHOW"
-	CLEAR      TokenType = "CLEAR"
-	EXPORT     TokenType = "EXPORT"
-	ENV        TokenType = "ENV"
-	RAVENADD   TokenType = "RAVENADD"
-	RAVENHELP  TokenType = "RAVENHELP"
-	PS         TokenType = "PS"
-	KILL       TokenType = "KILL"
-	KILLALL    TokenType = "KILLALL"
-	JOBS       TokenType = "JOBS"
-	GREATER    TokenType = "GREATER"
-	INTO       TokenType = "INTO"
-	LESS       TokenType = "LESS"
-	OUT        TokenType = "OUT"
-	FULLSTOP   TokenType = "FULLSTOP"
-	FSLASH     TokenType = "FSLASH"
-	TILDE      TokenType = "TILDE"
+	EOF         TokenType = "EOF"
+	ILLEGAL     TokenType = "ILLEGAL"
+	LIST        TokenType = "LIST"
+	REMOVE      TokenType = "REMOVE"
+	CHANGEDIR   TokenType = "CHANGEDIR"
+	REMOVEDIR   TokenType = "REMOVEDIR"
+	MAKEDIR     TokenType = "MAKEDIR"
+	WHOAMI      TokenType = "WHOAMI"
+	CURRENTDIR  TokenType = "CURRENTDIR"
+	MAKEFILE    TokenType = "MAKEFILE"
+	OUTPUT      TokenType = "OUTPUT"
+	IDENT       TokenType = "IDENTIFER"
+	INTEGER     TokenType = "INTEGER"
+	STRING      TokenType = "STRING"
+	FLAG        TokenType = "FLAG"       // command flag like -l, --all, --max=5
+	LASTSTATUS  TokenType = "LASTSTATUS" // $? - exit status of the last command
+	PIPE        TokenType = "PIPE"
+	DOLLAR      TokenType = "DOLLAR"
+	PRINT       TokenType = "PRINT"
+	SHOW        TokenType = "SHOW"
+	CLEAR       TokenType = "CLEAR"
+	EXPORT      TokenType = "EXPORT"
+	ENV         TokenType = "ENV"
+	RAVENADD    TokenType = "RAVENADD"
+	RAVENHELP   TokenType = "RAVENHELP"
+	RAVENUPDATE TokenType = "RAVENUPDATE"
+	PS          TokenType = "PS"
+	KILL        TokenType = "KILL"
+	KILLALL     TokenType = "KILLALL"
+	JOBS        TokenType = "JOBS"
+	GREATER     TokenType = "GREATER"
+	INTO        TokenType = "INTO"
+	LESS        TokenType = "LESS"
+	OUT         TokenType = "OUT"
+	FULLSTOP    TokenType = "FULLSTOP"
+	FSLASH      TokenType = "FSLASH"
+	TILDE       TokenType = "TILDE"
 
 	// Control flow keywords
 	FOR      TokenType = "FOR"
@@ -101,46 +102,47 @@ const (
 )
 
 var TokenMap = map[string]TokenType{
-	"ls":         LIST,
-	"rm":         REMOVE,
-	"remove":     REMOVE, // human-readable alias for rm
-	"delete":     REMOVE, // human-readable alias for rm
-	"mkdir":      MAKEDIR,
-	"makedir":    MAKEDIR, // human-readable alias for mkdir
-	"rmdir":      REMOVEDIR,
-	"cd":         CHANGEDIR,
-	"cwd":        CURRENTDIR,
-	"whereami":   CURRENTDIR, // human-readable alias for cwd
-	"wai":        CURRENTDIR, // short alias for whereami/cwd
-	"whoami":     WHOAMI,
-	"mkfile":     MAKEFILE,
-	"makefile":   MAKEFILE, // human-readable alias for mkfile
-	"newfile":    MAKEFILE, // human-readable alias for mkfile
-	"touch":      MAKEFILE, // familiar alias for mkfile
-	"output":     OUTPUT,
-	"print":      PRINT,
-	"show":       SHOW,
-	"read":       SHOW, // human-readable alias for show (read a file)
-	"view":       SHOW, // human-readable alias for show (view a file)
-	"clear":      CLEAR,
-	"export":     EXPORT,
-	"env":        ENV,
-	"raven-add":  RAVENADD,
-	"raven-help": RAVENHELP,
-	"help":       RAVENHELP, // short alias for raven-help
-	"ps":         PS,
-	"kill":       KILL,
-	"killall":    KILLALL,
-	"jobs":       JOBS,
-	"for":        FOR,
-	"in":         IN,
-	"if":         IF,
-	"else":       ELSE,
-	"range":      RANGE,
-	"append":     APPEND,
-	"while":      WHILE,
-	"break":      BREAK,
-	"continue":   CONTINUE,
-	"fn":         FN,
-	"return":     RETURN,
+	"ls":           LIST,
+	"rm":           REMOVE,
+	"remove":       REMOVE, // human-readable alias for rm
+	"delete":       REMOVE, // human-readable alias for rm
+	"mkdir":        MAKEDIR,
+	"makedir":      MAKEDIR, // human-readable alias for mkdir
+	"rmdir":        REMOVEDIR,
+	"cd":           CHANGEDIR,
+	"cwd":          CURRENTDIR,
+	"whereami":     CURRENTDIR, // human-readable alias for cwd
+	"wai":          CURRENTDIR, // short alias for whereami/cwd
+	"whoami":       WHOAMI,
+	"mkfile":       MAKEFILE,
+	"makefile":     MAKEFILE, // human-readable alias for mkfile
+	"newfile":      MAKEFILE, // human-readable alias for mkfile
+	"touch":        MAKEFILE, // familiar alias for mkfile
+	"output":       OUTPUT,
+	"print":        PRINT,
+	"show":         SHOW,
+	"read":         SHOW, // human-readable alias for show (read a file)
+	"view":         SHOW, // human-readable alias for show (view a file)
+	"clear":        CLEAR,
+	"export":       EXPORT,
+	"env":          ENV,
+	"raven-add":    RAVENADD,
+	"raven-help":   RAVENHELP,
+	"help":         RAVENHELP, // short alias for raven-help
+	"raven-update": RAVENUPDATE,
+	"ps":           PS,
+	"kill":         KILL,
+	"killall":      KILLALL,
+	"jobs":         JOBS,
+	"for":          FOR,
+	"in":           IN,
+	"if":           IF,
+	"else":         ELSE,
+	"range":        RANGE,
+	"append":       APPEND,
+	"while":        WHILE,
+	"break":        BREAK,
+	"continue":     CONTINUE,
+	"fn":           FN,
+	"return":       RETURN,
 }

@@ -5,23 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"ravenshell/ansi"
 	"ravenshell/ast"
+	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"unicode/utf8"
 
 	"golang.org/x/term"
 )
 
 // Value represents any value in the shell
-type Value interface{}
+type Value any
 
 // controlKind identifies a non-local control-flow transfer.
 type controlKind int
@@ -58,14 +62,15 @@ func asControl(err error) (*controlSignal, bool) {
 
 // Evaluator executes AST nodes
 type Evaluator struct {
-	cwd         string                            // Current working directory
-	env         map[string]string                 // Environment variables (for $VAR)
-	vars        map[string]Value                  // Global script variables (== scopes[0])
-	scopes      []map[string]Value                // Variable scope chain; innermost is last
-	funcs       map[string]*ast.FunctionStatement // User-defined functions
-	searchPaths []string                          // Extra executable search dirs (raven-add path)
-	stdout      io.Writer                         // Standard output (for redirections)
-	stdin       io.Reader                         // Standard input (for redirections)
+	cwd          string                            // Current working directory
+	env          map[string]string                 // Environment variables (for $VAR)
+	vars         map[string]Value                  // Global script variables (== scopes[0])
+	scopes       []map[string]Value                // Variable scope chain; innermost is last
+	funcs        map[string]*ast.FunctionStatement // User-defined functions
+	searchPaths  []string                          // Extra executable search dirs (raven-add path)
+	defaultPaths []string                          // Standard system executable dirs for this OS
+	stdout       io.Writer                         // Standard output (for redirections)
+	stdin        io.Reader                         // Standard input (for redirections)
 
 	lastStatus int // exit status of the last command ($?)
 
@@ -96,8 +101,66 @@ func New() *Evaluator {
 		stdin:     os.Stdin,
 		nextJobID: 1,
 	}
+	e.defaultPaths = defaultExecPaths()
 	e.loadSearchPaths()
 	return e
+}
+
+// defaultExecPaths returns the standard system executable directories for the
+// host OS, plus common per-user bin dirs that exist. They are always searched
+// (and merged into a child's PATH) so basic tools resolve without the user
+// having to `raven-add path` standard locations like /usr/bin or
+// /opt/homebrew/bin. Only directories that exist are returned.
+func defaultExecPaths() []string {
+	var candidates []string
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = []string{
+			"/opt/homebrew/bin", "/opt/homebrew/sbin",
+			"/usr/local/bin", "/usr/local/sbin",
+			"/usr/bin", "/bin", "/usr/sbin", "/sbin",
+		}
+	default: // linux and other unix-likes
+		candidates = []string{
+			"/usr/local/sbin", "/usr/local/bin",
+			"/usr/sbin", "/usr/bin",
+			"/sbin", "/bin",
+		}
+	}
+	// Common per-user tool directories.
+	if home, err := os.UserHomeDir(); err == nil {
+		for _, sub := range []string{".local/bin", "go/bin", ".cargo/bin", ".bun/bin"} {
+			candidates = append(candidates, filepath.Join(home, sub))
+		}
+	}
+
+	var dirs []string
+	for _, dir := range candidates {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
+}
+
+// composePath joins ordered groups of directories into a single PATH value,
+// dropping empty entries and duplicates while preserving first-seen order.
+func composePath(groups ...[]string) string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, group := range groups {
+		for _, dir := range group {
+			if dir == "" {
+				continue
+			}
+			if _, ok := seen[dir]; ok {
+				continue
+			}
+			seen[dir] = struct{}{}
+			out = append(out, dir)
+		}
+	}
+	return strings.Join(out, string(os.PathListSeparator))
 }
 
 // Interrupt marks evaluation as interrupted (called from a SIGINT handler).
@@ -138,7 +201,7 @@ func (e *Evaluator) loadSearchPaths() {
 	if err != nil {
 		return
 	}
-	for _, line := range strings.Split(string(content), "\n") {
+	for line := range strings.SplitSeq(string(content), "\n") {
 		dir := strings.TrimSpace(line)
 		if dir != "" {
 			e.searchPaths = append(e.searchPaths, dir)
@@ -276,7 +339,12 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 		}
 		return node.Value, nil
 	case *ast.PathExpression:
-		return e.resolvePath(node.Value), nil
+		// A path used as a command argument is passed through verbatim, with
+		// only ~ expanded. Rewriting "." or a relative path to an absolute one
+		// here breaks external commands that treat "." specially (e.g. tools
+		// whose "stage everything" path differs from staging a named dir).
+		// Builtins re-resolve their own args against e.cwd via resolvePath.
+		return e.expandHome(node.Value), nil
 	case *ast.StringLiteral:
 		if node.Interpolate {
 			return e.interpolate(node.Value), nil
@@ -468,6 +536,8 @@ func (e *Evaluator) dispatchCommand(cmd *ast.Command, args []string) (string, er
 		return e.execRavenAdd(args)
 	case ast.CMD_RAVENHELP:
 		return e.execRavenHelp(args)
+	case ast.CMD_RAVENUPDATE:
+		return e.execRavenUpdate(args)
 	case ast.CMD_PS:
 		return e.execPs(args)
 	case ast.CMD_KILL:
@@ -498,8 +568,14 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 				return e.valueToString(val), nil
 			}
 		}
-		// Like a real shell, a missing command sets a non-zero status and
-		// reports to stderr, but does not abort the program.
+		// Like a real shell, an existing but non-executable file and a missing
+		// command set distinct non-zero statuses and report to stderr, but do
+		// not abort the program.
+		if errors.Is(err, os.ErrPermission) {
+			fmt.Fprintf(os.Stderr, "%s: permission denied\n", name)
+			e.lastStatus = 126
+			return "", nil
+		}
 		fmt.Fprintf(os.Stderr, "%s: command not found\n", name)
 		e.lastStatus = 127
 		return "", nil
@@ -513,6 +589,17 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 	c.Env = e.buildEnv()
 
 	err = c.Run()
+	if errors.Is(err, syscall.ENOEXEC) {
+		// Executable scripts with no shebang line: POSIX shells fall back to
+		// interpreting the file with /bin/sh.
+		c = exec.Command("/bin/sh", append([]string{path}, args...)...)
+		c.Dir = e.cwd
+		c.Stdin = e.stdin
+		c.Stdout = e.stdout
+		c.Stderr = os.Stderr
+		c.Env = e.buildEnv()
+		err = c.Run()
+	}
 	e.lastStatus = exitStatus(err)
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); !ok {
@@ -550,6 +637,9 @@ func (e *Evaluator) lookPath(name string) (string, error) {
 		if isExecutableFile(resolved) {
 			return resolved, nil
 		}
+		if info, err := os.Stat(resolved); err == nil && !info.IsDir() {
+			return "", os.ErrPermission
+		}
 		return "", exec.ErrNotFound
 	}
 
@@ -559,7 +649,22 @@ func (e *Evaluator) lookPath(name string) (string, error) {
 			return candidate, nil
 		}
 	}
-	return exec.LookPath(name)
+
+	// Try the inherited system PATH next.
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	} else {
+		// Fall back to the standard system directories so common tools resolve
+		// even when the inherited PATH is minimal or empty (e.g. when the shell
+		// is launched from a GUI with a stripped-down environment).
+		for _, dir := range e.defaultPaths {
+			candidate := filepath.Join(dir, name)
+			if isExecutableFile(candidate) {
+				return candidate, nil
+			}
+		}
+		return "", err
+	}
 }
 
 // isExecutableFile reports whether path is a regular file with an execute bit.
@@ -572,26 +677,22 @@ func isExecutableFile(path string) bool {
 }
 
 // buildEnv merges the process environment with shell-local variables and the
-// extra search paths (prepended to PATH) so external commands see both
-// inherited and user-set ($VAR) values plus any raven-add path directories.
+// executable search paths so external commands see both inherited and user-set
+// ($VAR) values, any raven-add path directories (prepended to PATH), and the OS
+// default directories (appended) so basic tools resolve even when the inherited
+// PATH is minimal.
 func (e *Evaluator) buildEnv() []string {
 	merged := make(map[string]string)
 	for _, kv := range os.Environ() {
-		if i := strings.IndexByte(kv, '='); i >= 0 {
-			merged[kv[:i]] = kv[i+1:]
+		if before, after, ok := strings.Cut(kv, "="); ok {
+			merged[before] = after
 		}
 	}
-	for k, v := range e.env {
-		merged[k] = v
-	}
-	if len(e.searchPaths) > 0 {
-		extra := strings.Join(e.searchPaths, string(os.PathListSeparator))
-		if existing := merged["PATH"]; existing != "" {
-			merged["PATH"] = extra + string(os.PathListSeparator) + existing
-		} else {
-			merged["PATH"] = extra
-		}
-	}
+	maps.Copy(merged, e.env)
+	// Compose PATH as: raven-add dirs, then the inherited PATH, then the OS
+	// default dirs. The defaults guarantee basic tools are reachable even when
+	// the inherited PATH is minimal, without the user adding them by hand.
+	merged["PATH"] = composePath(e.searchPaths, filepath.SplitList(merged["PATH"]), e.defaultPaths)
 
 	env := make([]string, 0, len(merged))
 	for k, v := range merged {
@@ -801,8 +902,8 @@ func formatColumns(names, display []string, perCol int) string {
 
 	// Width of each column = widest visible name it contains.
 	colWidth := make([]int, numCols)
-	for c := 0; c < numCols; c++ {
-		for r := 0; r < perCol; r++ {
+	for c := range numCols {
+		for r := range perCol {
 			idx := c*perCol + r
 			if idx >= n {
 				break
@@ -816,7 +917,7 @@ func formatColumns(names, display []string, perCol int) string {
 	const gap = 2
 	var out bytes.Buffer
 	for r := 0; r < rows; r++ {
-		for c := 0; c < numCols; c++ {
+		for c := range numCols {
 			idx := c*perCol + r
 			if idx >= n {
 				continue
@@ -1038,13 +1139,11 @@ func (e *Evaluator) execExport(args []string) (string, error) {
 func (e *Evaluator) execEnv() (string, error) {
 	merged := make(map[string]string)
 	for _, kv := range os.Environ() {
-		if i := strings.IndexByte(kv, '='); i >= 0 {
-			merged[kv[:i]] = kv[i+1:]
+		if before, after, ok := strings.Cut(kv, "="); ok {
+			merged[before] = after
 		}
 	}
-	for k, v := range e.env {
-		merged[k] = v
-	}
+	maps.Copy(merged, e.env)
 
 	names := make([]string, 0, len(merged))
 	for k := range merged {
@@ -1107,10 +1206,8 @@ func (e *Evaluator) execRavenAdd(args []string) (string, error) {
 // addSearchPath registers dir as an extra executable search directory and
 // persists it. It returns false if dir was already registered.
 func (e *Evaluator) addSearchPath(dir string) bool {
-	for _, existing := range e.searchPaths {
-		if existing == dir {
-			return false
-		}
+	if slices.Contains(e.searchPaths, dir) {
+		return false
 	}
 	// New directories take priority over existing ones.
 	e.searchPaths = append([]string{dir}, e.searchPaths...)
@@ -1168,6 +1265,7 @@ func (e *Evaluator) scanExecutables() []string {
 	set := make(map[string]bool)
 	dirs := append([]string{}, e.searchPaths...)
 	dirs = append(dirs, filepath.SplitList(os.Getenv("PATH"))...)
+	dirs = append(dirs, e.defaultPaths...)
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -1207,7 +1305,11 @@ func (e *Evaluator) evalCommandSubstitution(node *ast.CommandSubstitution) (Valu
 
 // expandHome expands a leading '~' or '~/...' to the user's home directory and
 // returns any other path unchanged. Unlike resolvePath it does not join with the
-// working directory, so relative paths and URLs are left exactly as written.
+// working directory, so relative paths and URLs are left exactly as written. This
+// is the only rewriting a shell performs on a path argument before handing it to
+// an external command: ~ is the shell's responsibility, but ".", "..", and
+// relative paths must reach the child verbatim so it resolves them against its
+// own working directory.
 func (e *Evaluator) expandHome(path string) string {
 	if path == "~" || strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
@@ -1222,6 +1324,10 @@ func (e *Evaluator) expandHome(path string) string {
 	return path
 }
 
+// resolvePath turns a path argument into an absolute, cleaned path rooted at
+// the shell's current directory. Builtins use this because the shell tracks its
+// own cwd (e.cwd) instead of calling os.Chdir, so a bare "." or "foo" must be
+// joined with e.cwd rather than the process working directory.
 func (e *Evaluator) resolvePath(path string) string {
 	if len(path) == 0 {
 		return e.cwd
@@ -1250,7 +1356,6 @@ func (e *Evaluator) resolvePath(path string) string {
 		return filepath.Clean(filepath.Join(home, path[2:]))
 	}
 
-	// Absolute path
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
 	}
@@ -1271,6 +1376,35 @@ func (e *Evaluator) expandVariable(name string) string {
 // GetCwd returns the current working directory
 func (e *Evaluator) GetCwd() string {
 	return e.cwd
+}
+
+// CallPrompt invokes a user-defined `prompt` function (if any) and renders its
+// return value as the REPL prompt. The function may take no parameters, or one
+// parameter that receives the exit status of the last command ($?). It returns
+// ok=false when no usable prompt function is defined, the call errors, or it
+// produces an empty prompt — callers then fall back to the built-in prompt.
+func (e *Evaluator) CallPrompt() (string, bool) {
+	fn, exists := e.funcs["prompt"]
+	if !exists || len(fn.Parameters) > 1 {
+		return "", false
+	}
+	var args []Value
+	if len(fn.Parameters) == 1 {
+		args = []Value{int64(e.lastStatus)}
+	}
+	// Commands run inside the prompt function must not clobber the $? seen by
+	// the user's next command.
+	saved := e.lastStatus
+	val, err := e.callFunction(fn, args)
+	e.lastStatus = saved
+	if err != nil || val == nil {
+		return "", false
+	}
+	s := e.valueToString(val)
+	if s == "" {
+		return "", false
+	}
+	return s, true
 }
 
 // SetEnv sets an environment variable
@@ -1721,7 +1855,7 @@ func (e *Evaluator) builtinRange(args []ast.Expression) (Value, error) {
 	}
 
 	result := make([]Value, n)
-	for i := int64(0); i < n; i++ {
+	for i := range n {
 		result[i] = i
 	}
 	return result, nil

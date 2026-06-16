@@ -52,7 +52,7 @@ func TestFormatColumnsColumnMajor(t *testing.T) {
 
 	var got []string
 	for c := 0; c < maxCols; c++ {
-		for r := 0; r < len(rows); r++ {
+		for r := range rows {
 			if c < len(rows[r]) {
 				got = append(got, rows[r][c])
 			}

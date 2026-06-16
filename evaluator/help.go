@@ -3,6 +3,7 @@ package evaluator
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -45,6 +46,8 @@ var helpEntries = []helpEntry{
 	{name: "killall", usage: "killall <name> [signal]", summary: "Signal every process whose name matches.", group: "Processes"},
 	{name: "jobs", usage: "jobs", summary: "List background jobs started with '&'.", group: "Processes"},
 
+	{name: "raven-update", usage: "raven-update [--check]", summary: "Rebuild RavenShell from source and replace the running binary in place.", group: "Maintenance"},
+
 	{name: "raven-help", aliases: []string{"help"}, usage: "raven-help [command]", summary: "List built-in commands, or show detailed help for one.", group: "Help"},
 }
 
@@ -54,6 +57,7 @@ var groupOrder = []string{
 	"Output",
 	"Environment",
 	"Processes",
+	"Maintenance",
 	"Help",
 }
 
@@ -68,16 +72,27 @@ func builtinCommandNames() []string {
 	return names
 }
 
+// BuiltinSummaries returns every built-in command name and alias mapped to
+// its one-line summary, used by tab completion to describe candidates.
+func BuiltinSummaries() map[string]string {
+	m := make(map[string]string, len(helpEntries)*2)
+	for _, h := range helpEntries {
+		m[h.name] = h.summary
+		for _, a := range h.aliases {
+			m[a] = h.summary
+		}
+	}
+	return m
+}
+
 // findHelp looks up a help entry by canonical name or any of its aliases.
 func findHelp(name string) (helpEntry, bool) {
 	for _, h := range helpEntries {
 		if h.name == name {
 			return h, true
 		}
-		for _, a := range h.aliases {
-			if a == name {
-				return h, true
-			}
+		if slices.Contains(h.aliases, name) {
+			return h, true
 		}
 	}
 	return helpEntry{}, false

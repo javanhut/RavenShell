@@ -205,6 +205,34 @@ func (c *Command) String() string {
 	return out.String()
 }
 
+// WordExpression represents a single shell "word" assembled from adjacent
+// tokens that had no whitespace between them, e.g. g+w, +%Y-%m-%d, or a literal
+// glued to an expansion like prefix$VAR. Its parts are concatenated (after
+// expansion) into one argument string at evaluation time. A word that reduces
+// to a single part (a lone $VAR, a quoted string, a plain path) is collapsed by
+// the parser to that part's own node instead, so this type only appears for
+// genuinely composite words.
+type WordExpression struct {
+	Token token.Token  // first token of the word
+	Parts []Expression // literal and expansion segments, in source order
+}
+
+func (we *WordExpression) expressionNode()      {}
+func (we *WordExpression) TokenLiteral() string { return we.Token.Literal }
+func (we *WordExpression) String() string {
+	var out bytes.Buffer
+	for _, p := range we.Parts {
+		// Literal segments are rendered raw (no surrounding quotes) so the
+		// printed word matches the source text it was assembled from.
+		if sl, ok := p.(*StringLiteral); ok {
+			out.WriteString(sl.Value)
+		} else {
+			out.WriteString(p.String())
+		}
+	}
+	return out.String()
+}
+
 // PipeExpression represents a pipe between commands
 type PipeExpression struct {
 	Token token.Token // The PIPE token '|'

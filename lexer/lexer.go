@@ -145,6 +145,17 @@ func (l *Lexer) scanToken() token.Token {
 	case ',':
 		return token.Token{Type: token.COMMA, Literal: string(l.advance())}
 	case '+':
+		// A '+' immediately followed by a letter is a command word, not addition
+		// (e.g. chmod's symbolic modes +x, +rwx). Arithmetic always uses spaces
+		// around the operator, so `a + b` stays unambiguous while `+x` is a word.
+		if unicode.IsLetter(rune(l.peekNext())) {
+			start := l.pos
+			l.advance() // consume the leading '+'
+			for !isFlagTerminator(l.peek()) {
+				l.advance()
+			}
+			return token.Token{Type: token.FLAG, Literal: l.input[start:l.pos]}
+		}
 		return token.Token{Type: token.PLUS, Literal: string(l.advance())}
 	case '-':
 		// A '-' immediately followed by a letter or another '-' is a command

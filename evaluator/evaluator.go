@@ -362,6 +362,18 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 		return e.evalBackground(node)
 	case *ast.CommandSubstitution:
 		return e.evalCommandSubstitution(node)
+	case *ast.WordExpression:
+		// A composite word: concatenate the string value of each part (literal
+		// runs and $-expansions) into a single argument.
+		var sb strings.Builder
+		for _, part := range node.Parts {
+			val, err := e.evalExpressionValue(part)
+			if err != nil {
+				return nil, err
+			}
+			sb.WriteString(e.valueToString(val))
+		}
+		return sb.String(), nil
 	case *ast.InfixExpression:
 		return e.evalInfixExpression(node)
 	case *ast.CallExpression:

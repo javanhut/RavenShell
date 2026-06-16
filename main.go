@@ -162,14 +162,20 @@ func runSource(eval *evaluator.Evaluator, source, label string) bool {
 	return true
 }
 
-// inputIncomplete reports whether src has unbalanced brackets or an unterminated
-// string, meaning the REPL should keep reading continuation lines.
+// inputIncomplete reports whether src is an incomplete command that the REPL
+// should keep reading continuation lines for. Input is incomplete when it has
+// unbalanced brackets, an unterminated string, a trailing line-continuation
+// backslash, or a trailing binary operator (a pipe `|`/`||` or logical `&&`)
+// that still needs a right-hand side. A single trailing `&` is the background
+// operator and is treated as complete.
 func inputIncomplete(src string) bool {
 	depth := 0
 	var inString byte // 0, '\'' or '"'
+	lastMeaningful := -1
 	for i := 0; i < len(src); i++ {
 		c := src[i]
 		if inString != 0 {
+			lastMeaningful = i
 			if c == inString {
 				inString = 0
 			}
@@ -178,19 +184,45 @@ func inputIncomplete(src string) bool {
 		switch c {
 		case '\'', '"':
 			inString = c
+			lastMeaningful = i
 		case '#':
 			for i < len(src) && src[i] != '\n' {
 				i++
 			}
+		case ' ', '\t', '\r', '\n':
+			// Whitespace is not meaningful for trailing-operator detection.
 		case '{', '(', '[':
 			depth++
+			lastMeaningful = i
 		case '}', ')', ']':
 			if depth > 0 {
 				depth--
 			}
+			lastMeaningful = i
+		default:
+			lastMeaningful = i
 		}
 	}
-	return depth > 0 || inString != 0
+
+	if depth > 0 || inString != 0 {
+		return true
+	}
+	if lastMeaningful < 0 {
+		return false
+	}
+
+	switch src[lastMeaningful] {
+	case '\\':
+		// Trailing line-continuation backslash.
+		return true
+	case '|':
+		// Trailing pipe (`|` or `||`) always needs a right-hand command.
+		return true
+	case '&':
+		// `&&` continues; a lone `&` is the background operator (complete).
+		return lastMeaningful > 0 && src[lastMeaningful-1] == '&'
+	}
+	return false
 }
 
 // runScript executes a .rsh script file

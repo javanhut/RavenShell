@@ -63,7 +63,7 @@ func (e *Evaluator) evalBackground(node *ast.BackgroundExpression) (Value, error
 		return e.evalExpressionValue(node.Command)
 	}
 
-	args, err := e.evalArgs(cmd.Arguments)
+	args, err := e.evalArgs(cmd.Arguments, true)
 	if err != nil {
 		return nil, err
 	}

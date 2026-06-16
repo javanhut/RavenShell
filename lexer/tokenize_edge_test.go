@@ -126,47 +126,6 @@ func TestWhitespaceFlags(t *testing.T) {
 	}
 }
 
-// TestColonAtWordTokens verifies that ':' and '@' are scanned as part of a
-// bareword instead of falling through to an ILLEGAL token. This is the lexer
-// half of the docker-image-tag parse-error fix.
-func TestColonAtWordTokens(t *testing.T) {
-	cases := []struct {
-		in   string
-		want []token.Token
-	}{
-		// Tags and host:port stay one IDENT.
-		{"image:tag", []token.Token{{Type: token.IDENT, Literal: "image:tag"}}},
-		{"localhost:8080", []token.Token{{Type: token.IDENT, Literal: "localhost:8080"}}},
-		// Digit-led port mapping becomes an IDENT (not an INTEGER).
-		{"8080:80", []token.Token{{Type: token.IDENT, Literal: "8080:80"}}},
-		// user@host and scope words.
-		{"user@host", []token.Token{{Type: token.IDENT, Literal: "user@host"}}},
-		// scheme://host splits into IDENT + slashes for the parser to rejoin.
-		{"http://x", []token.Token{
-			{Type: token.IDENT, Literal: "http:"},
-			{Type: token.FSLASH, Literal: "/"},
-			{Type: token.FSLASH, Literal: "/"},
-			{Type: token.IDENT, Literal: "x"},
-		}},
-		// A lone ':' no longer lexes as ILLEGAL.
-		{":", []token.Token{{Type: token.IDENT, Literal: ":"}}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.in, func(t *testing.T) {
-			got := tokenize(tc.in)
-			if len(got) != len(tc.want) {
-				t.Fatalf("%q -> %v, want %d tokens", tc.in, types(got), len(tc.want))
-			}
-			for i, w := range tc.want {
-				if got[i].Type != w.Type || got[i].Literal != w.Literal {
-					t.Errorf("%q token[%d] = {%q %q}, want {%q %q}",
-						tc.in, i, got[i].Type, got[i].Literal, w.Type, w.Literal)
-				}
-			}
-		})
-	}
-}
-
 func types(toks []token.Token) []token.TokenType {
 	out := make([]token.TokenType, len(toks))
 	for i, tk := range toks {

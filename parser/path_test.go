@@ -66,6 +66,18 @@ func TestSinglePathArgument(t *testing.T) {
 		"my-file.txt",
 		"docker-compose.yml",
 		"some-dir/another-file.tar.gz",
+
+		// URLs — the ':' must glue onto the surrounding word so the whole URL
+		// stays a single argument (regression: ':' used to lex as ILLEGAL).
+		"https://github.com/javanhut/RavenShell.git",
+		"http://example.com",
+		"https://example.com:8080/path",
+
+		// scp-style remotes — the '@' must glue too (regression: '@' used to lex
+		// as ILLEGAL).
+		"git@github.com:javanhut/RavenShell.git",
+		"ssh://git@host.example.com/repo.git",
+		"user@host:8080/path",
 	}
 
 	for _, in := range cases {
@@ -162,21 +174,22 @@ func TestColonAndAtWords(t *testing.T) {
 		"image:tag",
 		"nginx:latest",
 		"ravenlinux-build-minimal:latest", // the originally reported case
-		// Host:port and numeric port mappings.
+		// Host:port (the host segment starts with a letter).
 		"localhost:8080",
-		"8080:80",
 		"db.local:5432", // dotted host with a colon port
-		// (A bare-IP "127.0.0.1:5432" instead splits on the leading-digit
-		// dotted-name limitation — see TestDigitLeadingFilenameQuotedWorkaround.)
 		// URLs (scheme://host/path joins through the path machinery).
 		"http://example.com",
 		"https://example.com/a/b",
-		// scp-style and at-references.
+		// scp-style and at-references (the word before '@' anchors the path).
 		"git@github.com:user/repo.git",
 		"user@host",
-		"@scope/pkg",
 		// Volume-mount style with a colon between paths.
 		"/host:/container",
+		// NOTE: ':' and '@' are their own tokens, so a path only folds them in
+		// when it begins with a word, '.', or '/'. Forms that begin with a digit
+		// ("8080:80", a bare IP "127.0.0.1:5432") or with '@'/':' ("@scope/pkg")
+		// split into separate tokens and must be quoted — see
+		// TestDigitLeadingFilenameQuotedWorkaround.
 	}
 	for _, in := range cases {
 		t.Run(in, func(t *testing.T) {

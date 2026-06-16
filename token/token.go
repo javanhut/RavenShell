@@ -80,6 +80,8 @@ const (
 	LBRACKET TokenType = "LBRACKET" // [
 	RBRACKET TokenType = "RBRACKET" // ]
 	COMMA    TokenType = "COMMA"    // ,
+	COLON    TokenType = "COLON"    // :
+	AT       TokenType = "AT"       // @
 
 	// Operators
 	ASSIGN   TokenType = "ASSIGN"   // =

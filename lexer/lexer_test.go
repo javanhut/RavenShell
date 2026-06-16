@@ -139,3 +139,99 @@ func TestCommentsAndNewlines(t *testing.T) {
 		}
 	}
 }
+
+// TestURLTokens guards against the bug where ':' lexed as ILLEGAL, breaking
+// commands like `git clone https://...`. The colon must produce a COLON token.
+func TestURLTokens(t *testing.T) {
+	input := `git clone https://github.com/javanhut/RavenShell.git`
+	want := []token.TokenType{
+		token.IDENT,  // git
+		token.IDENT,  // clone
+		token.IDENT,  // https
+		token.COLON,  // :
+		token.FSLASH, // /
+		token.FSLASH, // /
+		token.IDENT,  // github
+		token.FULLSTOP,
+		token.IDENT, // com
+		token.FSLASH,
+		token.IDENT, // javanhut
+		token.FSLASH,
+		token.IDENT, // RavenShell
+		token.FULLSTOP,
+		token.IDENT, // git
+	}
+	l := NewLexer(input)
+	for i, w := range want {
+		tok := l.NextToken()
+		if tok.Type == token.ILLEGAL {
+			t.Fatalf("tests[%d] - got ILLEGAL (%q); ':' must not lex as ILLEGAL", i, tok.Literal)
+		}
+		if tok.Type != w {
+			t.Fatalf("tests[%d] - got=%q (%q), want=%q", i, tok.Type, tok.Literal, w)
+		}
+	}
+}
+
+// TestScpRemoteTokens guards the scp-style remote form git@host:repo.git: both
+// '@' and ':' must lex as real tokens (regression: each used to be ILLEGAL).
+func TestScpRemoteTokens(t *testing.T) {
+	input := `git@github.com:repo.git`
+	want := []token.TokenType{
+		token.IDENT, // git
+		token.AT,    // @
+		token.IDENT, // github
+		token.FULLSTOP,
+		token.IDENT, // com
+		token.COLON, // :
+		token.IDENT, // repo
+		token.FULLSTOP,
+		token.IDENT, // git
+	}
+	l := NewLexer(input)
+	for i, w := range want {
+		tok := l.NextToken()
+		if tok.Type == token.ILLEGAL {
+			t.Fatalf("tests[%d] - got ILLEGAL (%q)", i, tok.Literal)
+		}
+		if tok.Type != w {
+			t.Fatalf("tests[%d] - got=%q (%q), want=%q", i, tok.Type, tok.Literal, w)
+		}
+	}
+}
+
+// TestLineContinuation verifies that a backslash before a newline splices the
+// lines into one logical line: the tokens on both sides are produced and the
+// token after the continuation is NOT marked as starting a new line (so it stays
+// part of the same command's argument list).
+func TestLineContinuation(t *testing.T) {
+	l := NewLexer("echo a \\\n  b")
+	var got []string
+	var bTok token.Token
+	for {
+		tok := l.NextToken()
+		if tok.Type == token.EOF {
+			break
+		}
+		if tok.Type == token.ILLEGAL {
+			t.Fatalf("backslash continuation produced ILLEGAL (%q)", tok.Literal)
+		}
+		got = append(got, tok.Literal)
+		if tok.Literal == "b" {
+			bTok = tok
+		}
+	}
+	want := []string{"echo", "a", "b"}
+	if len(got) != len(want) {
+		t.Fatalf("got tokens %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("token[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+	// The spliced continuation must not look like a line boundary.
+	if bTok.PrecededByNewline {
+		t.Errorf("token after line continuation marked PrecededByNewline; it should be spliced onto the same line")
+	}
+}

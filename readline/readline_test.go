@@ -110,3 +110,91 @@ func TestHistoryPersistence(t *testing.T) {
 		t.Errorf("history file not written: %v", err)
 	}
 }
+
+func TestCommonPrefix(t *testing.T) {
+	cands := []Candidate{{Text: "checkout"}, {Text: "cherry-pick"}}
+	if got := commonPrefix(cands); got != "che" {
+		t.Errorf("commonPrefix = %q, want \"che\"", got)
+	}
+	if got := commonPrefix(nil); got != "" {
+		t.Errorf("commonPrefix(nil) = %q, want \"\"", got)
+	}
+	if got := commonPrefix([]Candidate{{Text: "only"}}); got != "only" {
+		t.Errorf("commonPrefix(single) = %q, want \"only\"", got)
+	}
+	if got := commonPrefix([]Candidate{{Text: "abc"}, {Text: "xyz"}}); got != "" {
+		t.Errorf("commonPrefix(disjoint) = %q, want \"\"", got)
+	}
+}
+
+func TestCurrentWord(t *testing.T) {
+	if got := currentWord("git che"); got != "che" {
+		t.Errorf("currentWord = %q, want \"che\"", got)
+	}
+	if got := currentWord("git "); got != "" {
+		t.Errorf("currentWord after space = %q, want \"\"", got)
+	}
+	if got := currentWord(""); got != "" {
+		t.Errorf("currentWord empty = %q, want \"\"", got)
+	}
+}
+
+func TestApplyCompletionSpace(t *testing.T) {
+	r := newTestReadline()
+
+	// Full completion of a non-directory appends a space.
+	line, pos := r.applyCompletion([]rune("git che"), 7, "checkout", true)
+	if string(line) != "git checkout " || pos != len(line) {
+		t.Errorf("applyCompletion = %q (pos %d), want \"git checkout \"", string(line), pos)
+	}
+
+	// Common-prefix insertion must not append a space.
+	line, pos = r.applyCompletion([]rune("git c"), 5, "ch", false)
+	if string(line) != "git ch" || pos != len(line) {
+		t.Errorf("prefix insertion = %q (pos %d), want \"git ch\"", string(line), pos)
+	}
+
+	// Directories never get a trailing space.
+	line, _ = r.applyCompletion([]rune("cd sr"), 5, "src/", true)
+	if string(line) != "cd src/" {
+		t.Errorf("dir completion = %q, want \"cd src/\"", string(line))
+	}
+}
+
+// TestDisplayWidth covers the ANSI-aware width used to compute how many rows the
+// wrapped prompt+line occupy. Color codes must contribute zero cells.
+func TestDisplayWidth(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"plain ascii", "hello", 5},
+		{"empty", "", 0},
+		{"single color code", "\033[32mgreen\033[0m", 5},
+		{"realistic prompt", "[\033[32mjavanhutchinson\033[0m@\033[34mlinux\033[0m] > ", 26},
+		{"only escapes", "\033[1m\033[0m", 0},
+		{"bare two-byte escape", "\033Mx", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := displayWidth(tc.in); got != tc.want {
+				t.Errorf("displayWidth(%q) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSuggestionTail returns only the portion of an autosuggestion beyond what
+// is already typed, so draw renders just the dim remainder.
+func TestSuggestionTail(t *testing.T) {
+	if got := suggestionTail([]rune("git "), "git status"); string(got) != "status" {
+		t.Errorf("suggestionTail = %q, want \"status\"", string(got))
+	}
+	if got := suggestionTail([]rune("ls"), ""); got != nil {
+		t.Errorf("suggestionTail with no suggestion = %q, want nil", string(got))
+	}
+	if got := suggestionTail([]rune("git status"), "git status"); got != nil {
+		t.Errorf("suggestionTail with equal-length suggestion = %q, want nil", string(got))
+	}
+}

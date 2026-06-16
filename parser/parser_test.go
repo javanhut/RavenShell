@@ -54,6 +54,8 @@ func TestAllCommands(t *testing.T) {
 		{"mkfile", ast.CMD_MAKEFILE, "mkfile"},
 		{"output", ast.CMD_OUTPUT, "output"},
 		{"print", ast.CMD_PRINT, "print"},
+		{"raven-add", ast.CMD_RAVENADD, "raven-add"},
+		{"raven-update", ast.CMD_RAVENUPDATE, "raven-update"},
 	}
 
 	for _, tt := range tests {
@@ -583,6 +585,70 @@ func TestNewlineSeparatesCommands(t *testing.T) {
 	if cmd.Type != ast.CMD_EXTERNAL || cmd.Name != "git" {
 		t.Errorf("second statement = {%s %s}, want external git", cmd.Type, cmd.Name)
 	}
+}
+
+func TestExternalCommandWithKeywordArgument(t *testing.T) {
+	// A reserved keyword (ls) used as an argument to an external command must be
+	// taken as a literal word, not split off into a second command. Previously
+	// `podman ls` parsed as two separate commands.
+	input := "podman ls"
+	l := lexer.NewLexer(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("got %d statements, want 1 (keyword arg was split into a command)", len(program.Statements))
+	}
+	cmd := program.Statements[0].(*ast.ExpressionStatement).Expression.(*ast.Command)
+	if cmd.Type != ast.CMD_EXTERNAL || cmd.Name != "podman" {
+		t.Fatalf("got command {%s %s}, want external podman", cmd.Type, cmd.Name)
+	}
+	if len(cmd.Arguments) != 1 {
+		t.Fatalf("wrong arg count. got=%d, want 1 (%s)", len(cmd.Arguments), cmd.String())
+	}
+	testIdentifier(t, cmd.Arguments[0], "ls")
+}
+
+func TestExternalCommandWithKeywordArgsAndFlags(t *testing.T) {
+	// Both `rm` (a keyword) and the following flag/path must attach to sudo.
+	input := "sudo rm -rf cache"
+	l := lexer.NewLexer(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("got %d statements, want 1", len(program.Statements))
+	}
+	cmd := program.Statements[0].(*ast.ExpressionStatement).Expression.(*ast.Command)
+	if cmd.Type != ast.CMD_EXTERNAL || cmd.Name != "sudo" {
+		t.Fatalf("got command {%s %s}, want external sudo", cmd.Type, cmd.Name)
+	}
+	if len(cmd.Arguments) != 3 {
+		t.Fatalf("wrong arg count. got=%d, want 3 (%s)", len(cmd.Arguments), cmd.String())
+	}
+	testIdentifier(t, cmd.Arguments[0], "rm")
+	if cmd.Arguments[1].String() != `"-rf"` {
+		t.Errorf("flag arg = %s, want \"-rf\"", cmd.Arguments[1].String())
+	}
+	testIdentifier(t, cmd.Arguments[2], "cache")
+}
+
+func TestKeywordArgumentWithExtensionStaysOnePath(t *testing.T) {
+	// A keyword glued to an extension (env.local) is a single path argument, not
+	// a keyword word followed by a separate ".local".
+	input := "cat env.local"
+	l := lexer.NewLexer(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	cmd := program.Statements[0].(*ast.ExpressionStatement).Expression.(*ast.Command)
+	if len(cmd.Arguments) != 1 {
+		t.Fatalf("wrong arg count. got=%d, want 1 (%s)", len(cmd.Arguments), cmd.String())
+	}
+	testPath(t, cmd.Arguments[0], "env.local")
 }
 
 func TestPipeRightSideIsCommand(t *testing.T) {

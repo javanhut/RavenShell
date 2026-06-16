@@ -128,12 +128,63 @@ Press `Tab` to complete the word at the cursor:
   functions, and executables found on the search/system `PATH`.
   - Type `mk` then `Tab` to see `mkdir`, `mkfile`
   - Type `gi` then `Tab` to complete external programs like `git`
+- **Subcommands and flags** (fish-style): RavenShell knows the subcommands and
+  common flags of popular tools — `git`, `go`, `npm`, `docker`, `make`,
+  `cargo`, and `brew` — and shows each candidate with a short description.
+  - `git ch` then `Tab` completes to `che`, and `Tab` again lists `checkout`
+    and `cherry-pick` with descriptions
+  - `git commit --` then `Tab` lists `--all`, `--amend`, `--message`, ...
+- **Dynamic arguments**, generated at the moment you press `Tab`:
+  - `git checkout <Tab>` lists your actual branches and tags
+  - `git push <Tab>` lists your remotes and branches
+  - `make <Tab>` lists the targets of the Makefile in the current directory
+  - `npm run <Tab>` lists the scripts from `package.json`
+- **Flags of any other command**: when a command has no built-in spec, the
+  first `Tab` on a `-` word runs `command --help` (with a one-second cap) and
+  scrapes its flags; the result is cached for the session.
 - **File paths** (later words): files and directories relative to the current
-  directory, including `~/`, `/absolute`, and relative paths.
+  directory, including `~/`, `/absolute`, and relative paths. Dotfiles are
+  hidden unless the word starts with `.`, and commands that only take
+  directories (like `cd`) only offer directories.
   - Type `~/Doc` then `Tab` to complete `~/Documents/`
 
-When a single completion matches it is inserted automatically; when several
-match, pressing `Tab` lists all options.
+When a single completion matches it is inserted automatically. When several
+match, `Tab` first inserts their longest common prefix; pressing `Tab` again
+lists all options, with descriptions shown dimmed. File candidates in the
+listing are color-coded by type, using the same scheme as `ls`: directories
+**bold blue**, symlinks **cyan**, executables **green**.
+
+#### Custom completions
+
+You can teach RavenShell to complete your own tools by dropping a JSON spec in
+`~/.config/ravenshell/completions/<command>.json`. The file is loaded the
+first time you complete that command:
+
+```json
+{
+  "flags": [{ "text": "--verbose", "desc": "Verbose output" }],
+  "subcommands": [
+    {
+      "name": "serve",
+      "desc": "Start the server",
+      "flags": [{ "text": "--port", "desc": "Port to listen on" }],
+      "args": {
+        "static": [{ "text": "dev" }, { "text": "prod" }],
+        "command": "mytool list-environments",
+        "noFiles": true
+      }
+    }
+  ],
+  "args": { "dirsOnly": false, "noFiles": false }
+}
+```
+
+- `flags` — flags offered anywhere on the command line.
+- `subcommands` — each with its own `flags` and `args`.
+- `args` — where positional-argument candidates come from: `static` is a fixed
+  list, `command` is a shell command run at completion time (one candidate per
+  output line; text and description separated by a tab), `noFiles` suppresses
+  the file fallback, and `dirsOnly` restricts the file fallback to directories.
 
 ### Autosuggestions
 

@@ -3,7 +3,9 @@ PREFIX      ?= /usr/local
 BINDIR      := $(PREFIX)/bin
 INSTALL_BIN := $(DESTDIR)$(BINDIR)/$(BINARY)
 VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS     := -X main.version=$(VERSION)
+SRCDIR      := $(CURDIR)
+# Stamp the source dir so `raven-update` can rebuild from here later.
+LDFLAGS     := -X main.version=$(VERSION) -X main.sourceDir=$(SRCDIR)
 
 .PHONY: all build install uninstall test vet fmt clean register-shell set-default help
 

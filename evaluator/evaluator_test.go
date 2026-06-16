@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"ravenshell/ast"
 	"ravenshell/lexer"
 	"ravenshell/parser"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -189,6 +191,50 @@ func TestCommandSubstitutionInExpression(t *testing.T) {
 	}
 }
 
+// TestPathArgPassedVerbatim guards the fix for `ivaldi gather .`: a "." or
+// relative path used as a command argument must reach external programs
+// unchanged (only ~ is expanded). Rewriting it to an absolute cwd path broke
+// tools that treat a literal "." specially.
+func TestPathArgPassedVerbatim(t *testing.T) {
+	e := New()
+	e.cwd = "/tmp/somewhere"
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+
+	cases := []struct{ in, want string }{
+		{".", "."},
+		{"..", ".."},
+		{"./a.txt", "./a.txt"},
+		{"sub/file.go", "sub/file.go"},
+		{"/abs/path", "/abs/path"},
+		{"~/x", filepath.Join(home, "x")},
+	}
+	for _, tc := range cases {
+		val, err := e.evalExpressionValue(&ast.PathExpression{Value: tc.in})
+		if err != nil {
+			t.Fatalf("evalExpressionValue(%q): %v", tc.in, err)
+		}
+		if got := e.valueToString(val); got != tc.want {
+			t.Errorf("path arg %q => %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestResolvePathJoinsCwd confirms the other half: builtins still resolve their
+// path args against the shell's tracked cwd (the shell never calls os.Chdir).
+func TestResolvePathJoinsCwd(t *testing.T) {
+	e := New()
+	e.cwd = "/tmp/work"
+	if got := e.resolvePath("."); got != "/tmp/work" {
+		t.Errorf(`resolvePath(".") = %q, want /tmp/work`, got)
+	}
+	if got := e.resolvePath("a.txt"); got != "/tmp/work/a.txt" {
+		t.Errorf(`resolvePath("a.txt") = %q, want /tmp/work/a.txt`, got)
+	}
+}
+
 func TestStringBuiltins(t *testing.T) {
 	cases := []struct {
 		src  string
@@ -272,12 +318,7 @@ func TestAvailableCommandsIncludesFunctionsAndExecutables(t *testing.T) {
 
 	cmds := e.AvailableCommands()
 	has := func(name string) bool {
-		for _, c := range cmds {
-			if c == name {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(cmds, name)
 	}
 	if !has("myfunc") {
 		t.Error("AvailableCommands missing user function myfunc")
@@ -385,6 +426,54 @@ func TestExternalCommandVariableFallback(t *testing.T) {
 	}
 	if out != "42" {
 		t.Errorf("fallback value = %q, want 42", out)
+	}
+}
+
+func TestCallPromptNoFunction(t *testing.T) {
+	e, _ := run(t, "x = 1")
+	if _, ok := e.CallPrompt(); ok {
+		t.Fatal("CallPrompt ok = true with no prompt function defined")
+	}
+}
+
+func TestCallPromptReturnsString(t *testing.T) {
+	e, _ := run(t, `fn prompt() {
+    return "raven> "
+}`)
+	got, ok := e.CallPrompt()
+	if !ok || got != "raven> " {
+		t.Fatalf("CallPrompt = %q, %v; want %q, true", got, ok, "raven> ")
+	}
+}
+
+func TestCallPromptReceivesLastStatus(t *testing.T) {
+	e, _ := run(t, `fn prompt(status) {
+    return "s:" + status
+}`)
+	e.lastStatus = 42
+	got, ok := e.CallPrompt()
+	if !ok || got != "s:42" {
+		t.Fatalf("CallPrompt = %q, %v; want %q, true", got, ok, "s:42")
+	}
+}
+
+func TestCallPromptPreservesLastStatus(t *testing.T) {
+	e, _ := run(t, `fn prompt() {
+    return $(false) + "> "
+}`)
+	e.lastStatus = 7
+	e.CallPrompt()
+	if e.lastStatus != 7 {
+		t.Fatalf("lastStatus = %d after CallPrompt, want 7", e.lastStatus)
+	}
+}
+
+func TestCallPromptEmptyFallsBack(t *testing.T) {
+	e, _ := run(t, `fn prompt() {
+    return ""
+}`)
+	if _, ok := e.CallPrompt(); ok {
+		t.Fatal("CallPrompt ok = true for empty prompt, want fallback")
 	}
 }
 

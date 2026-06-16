@@ -5,7 +5,7 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 ## Features
 
 - **Interactive REPL** - Full-featured command line with line editing and a colored prompt
-- **Smart Tab Completion** - Completes built-ins, user-defined functions, `$PATH` executables, and file paths
+- **Smart Tab Completion** - Fish-style completion of built-ins, user functions, `$PATH` executables, and file paths, plus subcommands and flags (with descriptions) for tools like `git`, `go`, `npm`, `docker`, and `make` — including dynamic candidates such as git branches and Makefile targets, user-defined completion specs, and file candidates color-coded by type
 - **Custom Search Paths** - `raven-add path <dir>` registers extra executable directories (saved to `~/.raven_paths`)
 - **Fish-style Autosuggestions** - As you type, the most recent matching command appears dimmed inline; accept it with → / Ctrl-E / End
 - **Persistent History** - Command history is saved to `~/.raven_history` and restored across sessions

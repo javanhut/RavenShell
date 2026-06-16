@@ -42,8 +42,15 @@ ravenshell/
 │   └── evaluator_test.go # Evaluator tests
 │
 ├── readline/
-│   ├── readline.go      # Interactive line editing, completion, autosuggestions
+│   ├── readline.go      # Interactive line editing, completion UI, autosuggestions
 │   └── readline_test.go # Readline tests
+│
+├── completion/
+│   ├── completion.go    # Fish-style completion engine (specs, files, dispatch)
+│   ├── specs.go         # Built-in specs (git, go, npm, docker, make, ...)
+│   ├── spec_file.go     # User spec files (~/.config/ravenshell/completions)
+│   ├── helpscan.go      # --help output scraping for unknown commands' flags
+│   └── completion_test.go # Completion tests
 │
 ├── ansi/
 │   └── ansi.go          # ANSI color escape codes and helpers
@@ -383,7 +390,9 @@ Provides interactive line editing.
 - Raw terminal mode handling
 - Cursor movement
 - Command history (arrow keys), persisted to `~/.raven_history`
-- Tab completion (built-ins, user functions, PATH executables, file paths)
+- Tab completion UI: single matches are inserted, multiple matches first get
+  their longest common prefix inserted, then a further Tab prints the listing
+  (descriptions dimmed, candidate text colored by file type)
 - Fish-style inline autosuggestions from history (dim text, accepted with
   →/Ctrl+E/End)
 - Keyboard shortcuts (Ctrl+A, Ctrl+E, etc.)
@@ -395,13 +404,71 @@ Provides interactive line editing.
 | `New(prompt)` | Creates readline instance, loads persistent history |
 | `ReadLine()` | Reads a line with editing support |
 | `AddHistory(line)` | Adds to history (memory + file) |
-| `SetCwdFunc(fn)` | Sets function for path completion |
-| `SetCommandProvider(fn)` | Supplies dynamic command names (functions, PATH executables) |
+| `SetCompleter(fn)` | Sets the completion source (the `completion` engine in the REPL) |
+| `SetCwdFunc(fn)` | Sets function for fallback path completion |
+| `SetCommandProvider(fn)` | Supplies fallback command names when no completer is set |
 | `suggestionFor(line)` | Computes the inline autosuggestion |
+
+Completion candidates are `readline.Candidate` values: `Text` (what gets
+inserted), `Desc` (shown dimmed in the listing), and `Style` (an ANSI code
+applied to `Text` in the listing only — directories bold blue, symlinks cyan,
+executables green, matching `ls`).
 
 The colored prompt itself is built in `main.go` (`makePrompt`), refreshed each
 iteration so it tracks the current directory. ANSI codes come from the `ansi`
 package.
+
+## Completion Package
+
+**Location:** `completion/`
+
+The fish-style completion engine. Readline owns the *UI* (when to insert, how
+to render the listing); this package decides *what* the candidates are.
+
+### Candidate sources, in lookup order
+
+1. **Built-in specs** (`specs.go`) — a registry of `Spec` values describing
+   subcommands, flags (both with descriptions), and argument sources for
+   common tools: `git`, `go`, `npm`, `docker`, `make`, `cargo`, `brew`, plus
+   raven built-ins (`cd` completes directories only, `help` completes built-in
+   names with their summaries).
+2. **User spec files** (`spec_file.go`) — `~/.config/ravenshell/completions/
+   <cmd>.json`, the equivalent of fish's `~/.config/fish/completions`. Loaded
+   lazily on first use and cached (including negative results) for the
+   session. The JSON format is documented in the User Guide.
+3. **`--help` scraping** (`helpscan.go`) — for flag words of commands with no
+   spec, `cmd --help` is run once (one-second cap), its output parsed for the
+   conventional `-f, --force   description` layout, and the result cached.
+4. **File paths** — the fallback for positional arguments, merged with
+   spec-provided candidates unless the spec sets `NoFiles`. Candidates carry
+   a file-type `Style` (dir/symlink/executable) and dotfiles are hidden
+   unless the word starts with `.`.
+
+### Key types
+
+| Type | Description |
+|------|-------------|
+| `Engine` | Holds the cwd/command providers and the spec + help caches |
+| `Spec` | How to complete one command: global flags, subcommands, args |
+| `SubSpec` | One subcommand: name, description, flags, args |
+| `ArgSpec` | Argument sources: static list, generator command, Go generator, file-fallback switches (`NoFiles`, `DirsOnly`) |
+| `Candidate` | One choice: `Text`, `Desc`, `Style` |
+
+`Engine.Complete(line, pos)` tokenizes the line up to the cursor, identifies
+the command and (from the first non-flag argument) the subcommand context,
+then assembles candidates: flags when the word starts with `-`, subcommand
+names in the subcommand position, argument sources plus the file fallback
+otherwise.
+
+**Dynamic candidates** are produced at completion time: `ArgSpec.Command` runs
+a shell command (e.g. `git branch` for `git checkout`) in the shell's current
+directory with a one-second timeout, one candidate per output line (text and
+description separated by a tab); `ArgSpec.Generate` is a Go function (Makefile
+target parsing for `make`, `package.json` scripts for `npm run`).
+
+The engine is wired up in `main.go`: it reads the current directory and
+command names from the evaluator (`GetCwd`, `AvailableCommands`,
+`BuiltinSummaries`) and is installed with `rl.SetCompleter`.
 
 ## Adding New Features
 
@@ -438,7 +505,11 @@ package.
        return e.execMyCommand(args)
    ```
 
-7. **Add to readline** command list for completion.
+7. **Add a help entry** in `evaluator/help.go` (`helpEntries`). This feeds
+   `raven-help`, the completable command names, and the description shown
+   next to the command in tab-completion listings. If the command's arguments
+   are more specific than "any file" (directories only, fixed keywords, ...),
+   also add a spec in `completion/specs.go`.
 
 ### Adding a New Operator
 
@@ -472,7 +543,8 @@ go test ./...
 - `lexer/lexer_test.go`: Tokenization (flags, hyphenated identifiers, newline tracking)
 - `parser/parser_test.go`: Parser correctness tests
 - `evaluator/evaluator_test.go`: Execution behavior (arithmetic, control flow, functions, env, builtins)
-- `readline/readline_test.go`: History persistence, autosuggestions, completion merging
+- `readline/readline_test.go`: History persistence, autosuggestions, common-prefix insertion, completion merging
+- `completion/completion_test.go`: Subcommand/flag context, user spec files, --help parsing, Makefile/npm generators, file-type styles
 
 ### Writing Tests
 

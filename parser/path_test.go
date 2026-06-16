@@ -138,12 +138,11 @@ func TestWhitespaceSeparatesPaths(t *testing.T) {
 	}
 }
 
-// TestDigitLeadingFilenameQuotedWorkaround documents a known limitation: a
-// filename that STARTS with a digit (e.g. 2024report.md) is tokenized as an
-// integer followed by a path, so unquoted it splits into two arguments. The
-// supported way to name such a file is to quote it, which parses as one string
-// argument. If unquoted digit-leading names are ever fixed, update this test.
-func TestDigitLeadingFilenameQuotedWorkaround(t *testing.T) {
+// TestDigitLeadingFilename verifies that a filename starting with a digit
+// (e.g. 2024report.md) stays a single argument whether quoted or not. Word
+// coalescing glues the leading integer token to the following path tokens, so
+// the old "must quote digit-leading names" limitation no longer applies.
+func TestDigitLeadingFilename(t *testing.T) {
 	// Quoted form: exactly one argument with the full name.
 	args := parseArgs(t, `"2024report.md"`)
 	if len(args) != 1 {
@@ -154,12 +153,14 @@ func TestDigitLeadingFilenameQuotedWorkaround(t *testing.T) {
 		t.Errorf("quoted name value = %q, want it to contain 2024report.md", got)
 	}
 
-	// Unquoted form: currently splits (documents the limitation). When this
-	// stops being true the name was fixed — flip this assertion then.
+	// Unquoted form: also exactly one argument now.
 	unquoted := parseArgs(t, "2024report.md")
-	if len(unquoted) == 1 {
-		t.Errorf("unquoted digit-leading name now parses as one argument — " +
-			"the limitation was fixed; update this test to expect 1 argument")
+	if len(unquoted) != 1 {
+		t.Fatalf("unquoted digit-leading name parsed into %d arguments, want 1: %v",
+			len(unquoted), argStrings(unquoted))
+	}
+	if got := unquoted[0].String(); got != "2024report.md" {
+		t.Errorf("unquoted name value = %q, want 2024report.md", got)
 	}
 }
 
@@ -201,6 +202,55 @@ func TestColonAndAtWords(t *testing.T) {
 				t.Errorf("arg value = %q, want %q", got, in)
 			}
 		})
+	}
+}
+
+// TestSymbolLeadingWords is the regression guard for the bug where an argument
+// led by (or containing) an operator character — chmod's +x, glued symbolic
+// modes like g+w, date's +%Y-%m-%d, tail's +10 line offset, globs like *.txt —
+// was misparsed as arithmetic and collapsed (e.g. `chmod +x` became the bogus
+// command word "chmodx"). Each must now stay a single argument whose printed
+// value is the source text unchanged.
+func TestSymbolLeadingWords(t *testing.T) {
+	cases := []string{
+		"+x",
+		"+rwx",
+		"g+w",
+		"u+x",
+		"a-x",
+		"+%Y-%m-%d",
+		"+10",
+		"*.txt",
+		"-",
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			args := parseArgs(t, in)
+			if len(args) != 1 {
+				t.Fatalf("%q parsed into %d arguments, want 1: %v", in, len(args), argStrings(args))
+			}
+			// Compare the underlying literal value rather than String(), since a
+			// standalone flag (+x) prints quoted as a StringLiteral while paths
+			// and identifiers print bare.
+			if got := argText(args[0]); got != in {
+				t.Errorf("arg value = %q, want %q", got, in)
+			}
+		})
+	}
+}
+
+// argText returns the literal text an argument node carries, independent of how
+// its String() renders it.
+func argText(exp ast.Expression) string {
+	switch a := exp.(type) {
+	case *ast.StringLiteral:
+		return a.Value
+	case *ast.PathExpression:
+		return a.Value
+	case *ast.Identifier:
+		return a.Value
+	default:
+		return exp.String()
 	}
 }
 

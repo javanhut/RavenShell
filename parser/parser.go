@@ -392,33 +392,164 @@ func (p *Parser) parseArguments() []ast.Expression {
 }
 
 // peekStartsArgument reports whether the peek token can begin another argument
-// word for the current command: a normal argument token, a flag, or a reserved
-// keyword being used as a bare word.
+// word for the current command. In argument position almost any token starts a
+// word — including operator characters like +, *, % and - that are arithmetic
+// operators elsewhere but literal text here (chmod +x, date +%Y, tail +10).
+// Only true shell boundaries (pipes, redirections, sequencing, grouping) stop
+// the argument list.
 func (p *Parser) peekStartsArgument() bool {
-	return p.isArgumentToken(p.peekToken.Type) || isBareWord(p.peekToken)
+	return !isWordBoundary(p.peekToken.Type)
 }
 
-// parseArgument parses the current token as a single command argument. A
-// reserved keyword used as a bare word (the "ls" in `podman ls`) is taken as a
-// literal word, joining any glued path continuation (config.toml, dir/file)
-// into one path, mirroring parseRedirectionTarget.
-func (p *Parser) parseArgument() ast.Expression {
-	if isBareWord(p.curToken) {
-		if (p.peekTokenIs(token.FSLASH) || p.peekTokenIs(token.FULLSTOP)) && !p.peekToken.PrecededByWhitespace {
-			return p.parsePathFromIdent()
-		}
-		return &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+// isWordBoundary reports whether a token type terminates an argument word
+// instead of being absorbed into it. These are the shell metacharacters that
+// must keep their own meaning even when glued to a word with no surrounding
+// whitespace (so `echo a|grep b` still pipes). Everything else — letters,
+// digits, dots, slashes, and the operator characters + - * % : @ etc. — is
+// ordinary word text in argument position.
+func isWordBoundary(t token.TokenType) bool {
+	switch t {
+	case token.EOF,
+		token.PIPE, token.OR, token.AND, token.AMP,
+		token.SEMICOLON,
+		token.INTO, token.OUT, token.GT, token.GTE, token.LT, token.LTE,
+		token.LPAREN, token.RPAREN,
+		token.LBRACE, token.RBRACE,
+		token.LBRACKET, token.RBRACKET:
+		return true
 	}
-	// Use PIPE precedence so pipes and redirects are left for the caller.
-	return p.parseExpression(PIPE)
+	return false
 }
 
-// isBareWord reports whether tok is a reserved keyword being used as a plain
-// word (its literal maps back to its own token type). As an argument to a
-// command such a token is literal text, not a nested command.
-func isBareWord(tok token.Token) bool {
-	t, ok := token.TokenMap[tok.Literal]
-	return ok && t == tok.Type
+// parseArgument assembles a single command argument as a shell "word": the
+// current token plus every following token that is glued to it (no intervening
+// whitespace) and is not a word boundary. Adjacent literal tokens are
+// concatenated verbatim, so operator-led or operator-containing words such as
+// +x, g+w, +%Y-%m-%d, *.txt, and digit-leading names like 2024report.md all
+// stay a single argument. Quoted strings and $-expansions inside a word are kept
+// as their own parts so they still interpolate/expand at evaluation time.
+//
+// A word that reduces to one part is returned as that part's natural node — an
+// Identifier, PathExpression, StringLiteral, IntegerLiteral, or
+// VariableReference — so existing consumers (and tests) see the same shapes as
+// before for ordinary arguments.
+func (p *Parser) parseArgument() ast.Expression {
+	firstTok := p.curToken
+	var parts []ast.Expression // literal runs and expansion parts, in order
+	var lit strings.Builder    // current run of glued literal text
+	var word strings.Builder   // full text, used to classify a pure-literal word
+	sawExpansion := false
+	tokenCount := 0
+
+	flushLit := func() {
+		if lit.Len() > 0 {
+			parts = append(parts, &ast.StringLiteral{Token: firstTok, Value: lit.String()})
+			lit.Reset()
+		}
+	}
+
+	for {
+		switch p.curToken.Type {
+		case token.STRING:
+			flushLit()
+			sawExpansion = true
+			parts = append(parts, &ast.StringLiteral{
+				Token:       p.curToken,
+				Value:       p.curToken.Literal,
+				Interpolate: !p.curToken.SingleQuoted,
+			})
+		case token.DOLLAR:
+			flushLit()
+			sawExpansion = true
+			if vr := p.parseVariableReference(); vr != nil {
+				parts = append(parts, vr)
+			}
+		case token.LASTSTATUS:
+			flushLit()
+			sawExpansion = true
+			parts = append(parts, &ast.LastStatus{Token: p.curToken})
+		default:
+			lit.WriteString(p.curToken.Literal)
+			word.WriteString(p.curToken.Literal)
+		}
+		tokenCount++
+
+		// Extend the word only across tokens that are directly glued (no
+		// whitespace, no newline) and are not boundaries.
+		if p.peekToken.PrecededByWhitespace || p.peekToken.PrecededByNewline {
+			break
+		}
+		if isWordBoundary(p.peekToken.Type) {
+			break
+		}
+		p.nextToken()
+	}
+	flushLit()
+
+	// Words containing an expansion stay composite (or collapse to the lone
+	// expansion part).
+	if sawExpansion {
+		if len(parts) == 1 {
+			return parts[0]
+		}
+		return &ast.WordExpression{Token: firstTok, Parts: parts}
+	}
+
+	// Pure-literal word: pick the node shape that matches its content.
+	text := word.String()
+	single := tokenCount == 1
+	switch {
+	case firstTok.Type == token.FULLSTOP || firstTok.Type == token.FSLASH || firstTok.Type == token.TILDE:
+		return &ast.PathExpression{Token: firstTok, Value: text}
+	case single && firstTok.Type == token.FLAG:
+		// A standalone flag (-l, --all, +x) keeps its StringLiteral shape.
+		return &ast.StringLiteral{Token: firstTok, Value: text}
+	case single && firstTok.Type == token.INTEGER:
+		return &ast.IntegerLiteral{Token: firstTok, Value: parseIntLiteral(text)}
+	case strings.ContainsAny(text, "./"):
+		// Anything with a dot or slash is a path (file.txt, foo/bar, *.txt).
+		return &ast.PathExpression{Token: firstTok, Value: text}
+	case isCleanWord(text):
+		// A plain word (letters, digits, _, -) is a bare identifier.
+		return &ast.Identifier{Token: firstTok, Value: text}
+	default:
+		// Operator-containing words (g+w, +%Y-%m-%d, image:tag, a lone +) are
+		// passed through verbatim as a path-like literal.
+		return &ast.PathExpression{Token: firstTok, Value: text}
+	}
+}
+
+// parseIntLiteral parses a base-10 integer word into an int64, returning 0 if it
+// does not fit (the word was already established to be a single INTEGER token,
+// so this only guards against overflow).
+func parseIntLiteral(s string) int64 {
+	v, err := strconv.ParseInt(s, 0, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// isCleanWord reports whether s is a plain identifier-style word: letters,
+// digits, underscores, and interior hyphens only. Such words become Identifier
+// arguments; anything else (operators, colons, ...) is treated as a literal
+// path.
+func isCleanWord(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_':
+			continue
+		case c == '-' && i > 0:
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // parseCommandKeyword handles command keyword tokens (LIST, REMOVE, etc.)
@@ -490,17 +621,6 @@ func (p *Parser) isNextAssignment() bool {
 	p.peekToken = savedPeek
 
 	return isAssign
-}
-
-// isArgumentToken returns true if the token type can be a command argument
-func (p *Parser) isArgumentToken(tt token.TokenType) bool {
-	switch tt {
-	case token.IDENT, token.STRING, token.INTEGER, token.DOLLAR, token.LASTSTATUS,
-		token.FULLSTOP, token.FSLASH, token.TILDE, token.FLAG:
-		return true
-	default:
-		return false
-	}
 }
 
 // isPathContinuation reports whether tok can extend a path it is glued to with

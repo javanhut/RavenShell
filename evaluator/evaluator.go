@@ -550,6 +550,8 @@ func (e *Evaluator) dispatchCommand(cmd *ast.Command, args []string) (string, er
 		return e.execRavenHelp(args)
 	case ast.CMD_RAVENUPDATE:
 		return e.execRavenUpdate(args)
+	case ast.CMD_RAVENCOMPLETIONS:
+		return e.execRavenCompletions(args)
 	case ast.CMD_PS:
 		return e.execPs(args)
 	case ast.CMD_KILL:
@@ -972,7 +974,9 @@ func (e *Evaluator) execChangeDir(args []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("cd: %v", err)
 		}
-		e.cwd = home
+		if err := e.setCwd(home); err != nil {
+			return "", fmt.Errorf("cd: %v", err)
+		}
 		return "", nil
 	}
 
@@ -985,8 +989,24 @@ func (e *Evaluator) execChangeDir(args []string) (string, error) {
 		return "", fmt.Errorf("cd: %s: not a directory", args[0])
 	}
 
-	e.cwd = target
+	if err := e.setCwd(target); err != nil {
+		return "", fmt.Errorf("cd: %v", err)
+	}
 	return "", nil
+}
+
+// setCwd changes the shell's working directory, keeping the evaluator's tracked
+// cwd (e.cwd, used to resolve relative paths) and the OS process working
+// directory in sync. The process chdir matters for host terminals such as
+// RavenTerminal, which read the shell process's cwd (via /proc or lsof) to open
+// new tabs and splits in the same directory — without it, cd would move the
+// shell but a new tab would still open where the shell first started.
+func (e *Evaluator) setCwd(dir string) error {
+	if err := os.Chdir(dir); err != nil {
+		return err
+	}
+	e.cwd = dir
+	return nil
 }
 
 func (e *Evaluator) execCurrentDir() (string, error) {

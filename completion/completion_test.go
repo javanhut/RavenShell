@@ -16,6 +16,7 @@ func newTestEngine(dir string, commands ...string) *Engine {
 		map[string]string{"print": "Print text."},
 	)
 	e.specDir = ""
+	e.cacheDir = dir // keep man/--help caches inside the test's temp dir
 	return e
 }
 

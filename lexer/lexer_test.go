@@ -57,6 +57,68 @@ func TestFlagTokens(t *testing.T) {
 	}
 }
 
+// TestFlagDoesNotSwallowSeparators checks that a flag glued to a command
+// separator (no surrounding space) still tokenizes the separator on its own, so
+// `echo -n;echo`, `cmd -x&&y`, and `cmd -x&` split correctly.
+func TestFlagDoesNotSwallowSeparators(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []struct {
+			typ token.TokenType
+			lit string
+		}
+	}{
+		{"echo -y;echo", []struct {
+			typ token.TokenType
+			lit string
+		}{
+			{token.IDENT, "echo"}, {token.FLAG, "-y"}, {token.SEMICOLON, ";"},
+			{token.IDENT, "echo"}, {token.EOF, ""},
+		}},
+		{"cmd -x&&y", []struct {
+			typ token.TokenType
+			lit string
+		}{
+			{token.IDENT, "cmd"}, {token.FLAG, "-x"}, {token.AND, "&&"},
+			{token.IDENT, "y"}, {token.EOF, ""},
+		}},
+		{"cmd -x&", []struct {
+			typ token.TokenType
+			lit string
+		}{
+			{token.IDENT, "cmd"}, {token.FLAG, "-x"}, {token.AMP, "&"}, {token.EOF, ""},
+		}},
+		{"cmd -x]", []struct {
+			typ token.TokenType
+			lit string
+		}{
+			{token.IDENT, "cmd"}, {token.FLAG, "-x"}, {token.RBRACKET, "]"}, {token.EOF, ""},
+		}},
+	}
+
+	for _, tc := range cases {
+		l := NewLexer(tc.input)
+		for i, w := range tc.want {
+			tok := l.NextToken()
+			if tok.Type != w.typ || tok.Literal != w.lit {
+				t.Errorf("%q tok[%d] = {%q %q}, want {%q %q}", tc.input, i, tok.Type, tok.Literal, w.typ, w.lit)
+			}
+		}
+	}
+}
+
+// TestFlagKeepsValue guards the regression boundary: real flag values with '='
+// or a glued path must stay attached to the flag.
+func TestFlagKeepsValue(t *testing.T) {
+	l := NewLexer("--color=auto --file=./a/b.txt")
+	for _, want := range []string{"--color=auto", "--file=./a/b.txt"} {
+		tok := l.NextToken()
+		if tok.Type != token.FLAG || tok.Literal != want {
+			t.Errorf("got {%q %q}, want FLAG %q", tok.Type, tok.Literal, want)
+		}
+	}
+}
+
 func TestMinusVsFlag(t *testing.T) {
 	// Spaces around '-' keep it as subtraction; '-' glued to a letter is a flag.
 	l := NewLexer("5 - 3")

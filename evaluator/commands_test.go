@@ -31,6 +31,54 @@ func runIn(t *testing.T, dir, src string) (*Evaluator, string) {
 	return e, buf.String()
 }
 
+// sameDir reports whether two paths refer to the same directory, resolving
+// symlinks (macOS temp dirs live under /var -> /private/var).
+func sameDir(a, b string) bool {
+	ra, ea := filepath.EvalSymlinks(a)
+	rb, eb := filepath.EvalSymlinks(b)
+	return ea == nil && eb == nil && ra == rb
+}
+
+// TestCdSyncsProcessCwd verifies that cd moves the OS process working directory,
+// not just the shell's tracked cwd — so a host terminal reading the process cwd
+// (RavenTerminal, for new tabs/splits) follows the user into and back out of
+// directories. Mirrors: cd into /test/person, then cd .. back to /test.
+func TestCdSyncsProcessCwd(t *testing.T) {
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	root := t.TempDir()
+	sub := filepath.Join(root, "person")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	e := New()
+	e.cwd = root
+	var buf bytes.Buffer
+	e.stdout = &buf
+
+	if _, err := e.execChangeDir([]string{"person"}); err != nil {
+		t.Fatalf("cd person: %v", err)
+	}
+	if wd, _ := os.Getwd(); !sameDir(wd, sub) {
+		t.Errorf("process cwd = %q, want %q", wd, sub)
+	}
+	if !sameDir(e.GetCwd(), sub) {
+		t.Errorf("e.GetCwd() = %q, want %q", e.GetCwd(), sub)
+	}
+
+	if _, err := e.execChangeDir([]string{".."}); err != nil {
+		t.Fatalf("cd ..: %v", err)
+	}
+	if wd, _ := os.Getwd(); !sameDir(wd, root) {
+		t.Errorf("after cd .., process cwd = %q, want %q", wd, root)
+	}
+}
+
 // TestLocationAliases checks that whereami/wai behave like cwd.
 func TestLocationAliases(t *testing.T) {
 	dir := t.TempDir()

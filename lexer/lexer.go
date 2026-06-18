@@ -318,10 +318,13 @@ func isAlphanumeric(ch byte) bool {
 
 // isFlagTerminator reports whether ch ends a command flag token. Flags run
 // until whitespace, EOF, or a shell operator/delimiter so values like
-// --color=auto or --file=./path stay attached to the flag.
+// --color=auto or --file=./path stay attached to the flag. The command
+// separators ';' and '&' (and ']' , matching '[') terminate the flag too, so a
+// flag glued to one of them — `echo -n;echo`, `cmd -x&&y`, `cmd -x&` — still
+// splits correctly; a literal ';' or '&' in a flag value must be quoted.
 func isFlagTerminator(ch byte) bool {
 	switch ch {
-	case 0, ' ', '\t', '\n', '\r', '|', '<', '>', '{', '}', '(', ')', ',', '"', '\'':
+	case 0, ' ', '\t', '\n', '\r', '|', '<', '>', '{', '}', '(', ')', '[', ']', ',', ';', '&', '"', '\'':
 		return true
 	default:
 		return false

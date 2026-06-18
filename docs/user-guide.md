@@ -139,9 +139,18 @@ Press `Tab` to complete the word at the cursor:
   - `git push <Tab>` lists your remotes and branches
   - `make <Tab>` lists the targets of the Makefile in the current directory
   - `npm run <Tab>` lists the scripts from `package.json`
-- **Flags of any other command**: when a command has no built-in spec, the
-  first `Tab` on a `-` word runs `command --help` (with a one-second cap) and
-  scrapes its flags; the result is cached for the session.
+- **Flags of any other command** (fish-style, from man pages): when a command
+  has no built-in spec, the first `Tab` on a `-` word reads the command's **man
+  page**, scrapes its flags and their descriptions, and caches them to disk
+  (`command --help` is used as a fallback when there is no man page).
+  - `curl --<Tab>`, `rsync --<Tab>`, `ssh -<Tab>` all work with descriptions
+- **Subcommands of any other command** (from `--help`): the first `Tab` at the
+  subcommand position of a spec-less tool runs `command --help`, parses its
+  `Commands:` section, and caches the result.
+  - `kubectl <Tab>`, `gh <Tab>`, `terraform <Tab>` list their subcommands
+  - This is filled in lazily per command; see
+    [Generating completions in bulk](#generating-completions-in-bulk) to
+    pre-build them all at once.
 - **File paths** (later words): files and directories relative to the current
   directory, including `~/`, `/absolute`, and relative paths. Dotfiles are
   hidden unless the word starts with `.`, and commands that only take
@@ -185,6 +194,33 @@ first time you complete that command:
   list, `command` is a shell command run at completion time (one candidate per
   output line; text and description separated by a tab), `noFiles` suppresses
   the file fallback, and `dirsOnly` restricts the file fallback to directories.
+
+#### Generating completions in bulk
+
+By default, flags and subcommands for tools without a built-in spec are scraped
+the first time you tab them and cached on disk
+(`~/.cache/ravenshell/completions`, honoring `$XDG_CACHE_HOME`). The cache is
+keyed by the man page / binary modification time, so it refreshes automatically
+when a tool is upgraded.
+
+The `raven-completions` command — RavenShell's equivalent of fish's
+`fish_update_completions` — pre-builds the cache so completions are instant from
+the first tab:
+
+```
+raven-completions               # show the cache location and how many are cached
+raven-completions update        # parse every installed man page for flags
+raven-completions update --deep # also run '<cmd> --help' for subcommands
+raven-completions clear         # delete the cache
+raven-completions path          # print the cache directory
+```
+
+`update` only reads man pages, so it is safe and passive. `update --deep`
+additionally runs `<command> --help` on every user command to harvest
+subcommands (kubectl, gh, docker, …); because that executes those programs, it
+is opt-in. You rarely need either — tabbing a command fills its completions in
+on demand — but `--deep` is the way to get subcommands for *every* installed
+tool at once.
 
 ### Autosuggestions
 
@@ -305,6 +341,8 @@ lines in `.ravenrc` works too.
 | `~/.ravenrc` | Startup script, run as a program on launch |
 | `~/.raven_history` | Persistent command history |
 | `~/.raven_paths` | Extra executable search directories (`raven-add path`) |
+| `~/.config/ravenshell/completions/` | Your own completion specs (`<command>.json`) |
+| `~/.cache/ravenshell/completions/` | Auto-generated completions from man pages / `--help` (`raven-completions`; honors `$XDG_CACHE_HOME`) |
 
 ## Working with Files and Directories
 

@@ -630,10 +630,7 @@ func (r *Readline) renderEscapes(cols int, line []rune, pos int, suggestion stri
 	var b strings.Builder
 
 	// Rows the new render needs, and the cursor's row within the previous render.
-	rows := (plen + blen + cols - 1) / cols
-	if rows < 1 {
-		rows = 1
-	}
+	rows := max((plen+blen+cols-1)/cols, 1)
 	rpos := (plen + r.oldpos + cols) / cols
 	oldRows := r.maxrows
 	if rows > r.maxrows {

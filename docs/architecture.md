@@ -49,7 +49,8 @@ ravenshell/
 │   ├── completion.go    # Fish-style completion engine (specs, files, dispatch)
 │   ├── specs.go         # Built-in specs (git, go, npm, docker, make, ...)
 │   ├── spec_file.go     # User spec files (~/.config/ravenshell/completions)
-│   ├── helpscan.go      # --help output scraping for unknown commands' flags
+│   ├── manpage.go       # Man-page flag scraping + disk cache (fish_update_completions)
+│   ├── helpscan.go      # --help scraping for spec-less commands' flags & subcommands
 │   └── completion_test.go # Completion tests
 │
 ├── ansi/
@@ -436,10 +437,22 @@ to render the listing); this package decides *what* the candidates are.
    <cmd>.json`, the equivalent of fish's `~/.config/fish/completions`. Loaded
    lazily on first use and cached (including negative results) for the
    session. The JSON format is documented in the User Guide.
-3. **`--help` scraping** (`helpscan.go`) — for flag words of commands with no
-   spec, `cmd --help` is run once (one-second cap), its output parsed for the
-   conventional `-f, --force   description` layout, and the result cached.
-4. **File paths** — the fallback for positional arguments, merged with
+3. **Man-page flags** (`manpage.go`) — for flag words of commands with no spec,
+   the command's man page is rendered (`man -w` / `man`), overstrike/ANSI is
+   decoded, and option flags with descriptions are parsed out (handling both
+   the nroff two-line and mandoc inline layouts). Results are cached to disk
+   under `~/.cache/ravenshell/completions` (honoring `$XDG_CACHE_HOME`),
+   invalidated by the man page's mtime. This is the equivalent of fish's
+   `fish_update_completions`; `GenerateAll` pre-builds the whole cache, exposed
+   as the `raven-completions` built-in.
+4. **`--help` scraping** (`helpscan.go`) — for spec-less commands, one
+   `cmd --help` run (three-second cap) yields both *flags* (fallback when there
+   is no man page) and *subcommands* (parsed from the `Commands:` section that
+   man pages rarely contain — kubectl, gh, docker, ...). Results, including
+   negatives, are cached to disk keyed by the binary's mtime. Subcommands are
+   offered only for commands with no built-in/user spec and never for shell
+   built-ins. `raven-completions update --deep` bulk-scrapes section-1 commands.
+5. **File paths** — the fallback for positional arguments, merged with
    spec-provided candidates unless the spec sets `NoFiles`. Candidates carry
    a file-type `Style` (dir/symlink/executable) and dotfiles are hidden
    unless the word starts with `.`.
@@ -448,7 +461,7 @@ to render the listing); this package decides *what* the candidates are.
 
 | Type | Description |
 |------|-------------|
-| `Engine` | Holds the cwd/command providers and the spec + help caches |
+| `Engine` | Holds the cwd/command providers and the spec, man-page, and --help caches |
 | `Spec` | How to complete one command: global flags, subcommands, args |
 | `SubSpec` | One subcommand: name, description, flags, args |
 | `ArgSpec` | Argument sources: static list, generator command, Go generator, file-fallback switches (`NoFiles`, `DirsOnly`) |

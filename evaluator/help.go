@@ -47,6 +47,7 @@ var helpEntries = []helpEntry{
 	{name: "jobs", usage: "jobs", summary: "List background jobs started with '&'.", group: "Processes"},
 
 	{name: "raven-update", usage: "raven-update [--check]", summary: "Rebuild RavenShell from source and replace the running binary in place.", group: "Maintenance"},
+	{name: "raven-completions", usage: "raven-completions [update|clear|path]", summary: "Generate tab completions for commands from their man pages (fish-style).", group: "Maintenance"},
 
 	{name: "raven-help", aliases: []string{"help"}, usage: "raven-help [command]", summary: "List built-in commands, or show detailed help for one.", group: "Help"},
 }

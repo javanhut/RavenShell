@@ -25,9 +25,9 @@ import (
 // completed; Desc is shown alongside it in the completion listing; Style is
 // an optional ANSI code applied to Text in the listing (file-type colors).
 type Candidate struct {
-	Text  string
-	Desc  string
-	Style string
+	Text  string `json:"text"`
+	Desc  string `json:"desc,omitempty"`
+	Style string `json:"style,omitempty"`
 }
 
 // ArgSpec describes where a command's (or subcommand's) positional argument
@@ -70,8 +70,10 @@ type Engine struct {
 
 	mu        sync.Mutex
 	userSpecs map[string]*Spec       // lazy-loaded user spec files; nil = known absent
-	helpCache map[string][]Candidate // scraped --help flags; nil entry = scraped, none found
+	helpCache map[string]*helpResult // scraped --help flags+subcommands, per session
+	manCache  map[string][]Candidate // man-page flags; nil entry = no man page this session
 	specDir   string                 // user spec directory (overridable in tests)
+	cacheDir  string                 // man-page / --help completion cache directory
 }
 
 // New creates a completion engine. cwd supplies the shell's current directory,
@@ -83,7 +85,9 @@ func New(cwd func() string, commands func() []string, summaries map[string]strin
 		commands:  commands,
 		summaries: summaries,
 		userSpecs: make(map[string]*Spec),
-		helpCache: make(map[string][]Candidate),
+		helpCache: make(map[string]*helpResult),
+		manCache:  make(map[string][]Candidate),
+		cacheDir:  DefaultCacheDir(),
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		e.specDir = filepath.Join(home, ".config", "ravenshell", "completions")
@@ -144,7 +148,7 @@ func (e *Engine) Complete(line string, pos int) []Candidate {
 			}
 		}
 		if len(flags) == 0 {
-			flags = e.scrapedHelpFlags(cmd)
+			flags = e.fallbackFlags(cmd)
 		}
 		return finish(flags, cur)
 	}
@@ -156,6 +160,18 @@ func (e *Engine) Complete(line string, pos int) []Candidate {
 			out = append(out, Candidate{Text: s.Name, Desc: s.Desc})
 		}
 		return finish(out, cur)
+	}
+
+	// Commands with no spec at all (kubectl, gh, terraform, ...) get their
+	// subcommands scraped from --help. They are offered only at the first
+	// non-flag position and only when something matches what's typed, so a path
+	// argument still falls through to file completion below.
+	if spec == nil && !subConsumed {
+		if subs := e.helpSubcommands(cmd); len(subs) > 0 {
+			if matched := finish(subs, cur); len(matched) > 0 {
+				return matched
+			}
+		}
 	}
 
 	// Positional argument: spec-provided sources plus the file fallback.

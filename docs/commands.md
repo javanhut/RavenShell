@@ -409,6 +409,41 @@ help read                   # resolves to the `show` command
 
 ---
 
+### raven-completions - Generate Tab Completions
+
+Builds fish-style tab completions for system commands by scraping their man
+pages (for flags) and their `--help` output (for subcommands), caching the
+result on disk. It is RavenShell's equivalent of fish's `fish_update_completions`.
+
+Completions are also generated automatically the first time you tab a command;
+this command just pre-builds the cache. The cache lives in
+`~/.cache/ravenshell/completions` (honoring `$XDG_CACHE_HOME`) and refreshes
+when a tool's man page or binary changes.
+
+**Syntax:**
+```
+raven-completions                 # show the cache location and entry count
+raven-completions update          # parse every man page for command flags
+raven-completions update --deep   # also run '<cmd> --help' for subcommands
+raven-completions clear           # delete the cache
+raven-completions path            # print the cache directory
+```
+
+**Examples:**
+```rsh
+raven-completions                 # status
+raven-completions update          # pre-build flag completions (passive)
+raven-completions update --deep   # also harvest subcommands (runs programs)
+raven-completions clear           # start fresh
+```
+
+**Notes:**
+- `update` only reads man pages, so it makes no changes beyond the cache.
+- `--deep` runs `<command> --help` on every user command, so it executes those
+  programs; it is opt-in for that reason.
+
+---
+
 ## External Commands
 
 Any command that is not a built-in is executed as an external program. The shell

@@ -277,6 +277,13 @@ func builtinSpecs(e *Engine) map[string]*Spec {
 		"rmdir": {Flags: []Candidate{{Text: "-f", Desc: "Remove non-empty directories"}, {Text: "--force", Desc: "Remove non-empty directories"}}, Args: &ArgSpec{DirsOnly: true}},
 		"raven-add": {Args: &ArgSpec{Static: []Candidate{
 			{Text: "path", Desc: "Register an extra executable search directory"}}}},
+		"raven-completions": {
+			Flags: []Candidate{{Text: "--deep", Desc: "With update: scrape --help for subcommands too"}},
+			Args: &ArgSpec{Static: []Candidate{
+				{Text: "update", Desc: "Parse man pages and cache completions"},
+				{Text: "clear", Desc: "Delete cached completions"},
+				{Text: "path", Desc: "Print the cache directory"},
+			}, NoFiles: true}},
 	}
 
 	// help/raven-help complete the built-in command names with their summaries.

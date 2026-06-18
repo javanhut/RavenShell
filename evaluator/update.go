@@ -162,7 +162,7 @@ func isRavenSource(dir string) bool {
 	if err != nil {
 		return false
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if strings.TrimSpace(line) == "module ravenshell" {
 			return true
 		}
@@ -303,8 +303,8 @@ func firstLine(out string, err error) string {
 	if s == "" {
 		return err.Error()
 	}
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
+	if before, _, ok := strings.Cut(s, "\n"); ok {
+		return before
 	}
 	return s
 }

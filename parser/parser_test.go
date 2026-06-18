@@ -520,6 +520,66 @@ func TestIntegerLiteral(t *testing.T) {
 
 // Helper functions
 
+// TestUnclosedBlockReportsError checks that a block left open at EOF is a parse
+// error rather than being silently accepted (which would absorb any following
+// statements into the body).
+func TestUnclosedBlockReportsError(t *testing.T) {
+	inputs := []string{
+		"for i in range(3) { print i",
+		"if 1 == 1 { print HI",
+		"while 1 == 1 { print x",
+		"fn greet() { print hi",
+		"if 1 == 1 { print a } else { print b",      // unclosed else block
+		"for i in range(2) {\nprint i\nprint after", // following stmt absorbed
+	}
+	for _, in := range inputs {
+		p := New(lexer.NewLexer(in))
+		p.ParseProgram()
+		if len(p.Errors()) == 0 {
+			t.Errorf("input %q: expected a parse error for the unclosed block, got none", in)
+		}
+	}
+}
+
+// TestClosedBlocksParseClean is the regression guard: well-formed blocks must
+// still parse without errors after the unclosed-block check was added.
+func TestClosedBlocksParseClean(t *testing.T) {
+	inputs := []string{
+		"for i in range(3) { print i }",
+		"if 1 == 1 { print HI }",
+		"if 1 == 1 { print a } else { print b }",
+		"while 1 == 1 { break }",
+		"fn greet() { print hi }",
+	}
+	for _, in := range inputs {
+		p := New(lexer.NewLexer(in))
+		p.ParseProgram()
+		if errs := p.Errors(); len(errs) != 0 {
+			t.Errorf("input %q parsed with errors: %v", in, errs)
+		}
+	}
+}
+
+// TestSeparatorSplitsAfterFlag verifies the lexer fix at the parser level: a
+// command separator glued to a flag still ends the command.
+func TestSeparatorSplitsAfterFlag(t *testing.T) {
+	p := New(lexer.NewLexer("echo -y;echo SECOND"))
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+	if len(program.Statements) != 2 {
+		t.Fatalf("expected 2 statements, got %d", len(program.Statements))
+	}
+
+	// A flag glued to '&' backgrounds the command rather than joining the flag.
+	p2 := New(lexer.NewLexer("sleep 1 -x&"))
+	prog2 := p2.ParseProgram()
+	checkParserErrors(t, p2)
+	stmt := prog2.Statements[0].(*ast.ExpressionStatement)
+	if _, ok := stmt.Expression.(*ast.BackgroundExpression); !ok {
+		t.Fatalf("expected BackgroundExpression, got %T", stmt.Expression)
+	}
+}
+
 func checkParserErrors(t *testing.T, p *Parser) {
 	errors := p.Errors()
 	if len(errors) == 0 {

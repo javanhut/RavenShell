@@ -70,22 +70,30 @@ func (e *Evaluator) execRavenUpdate(args []string) (string, error) {
 		return "", nil
 	}
 
-	if _, err := exec.LookPath("go"); err != nil {
+	// Resolve build tools through the shell's own command resolution (search
+	// paths, then $PATH, then the built-in default dirs), not the bare process
+	// PATH. A GUI-launched shell often inherits a minimal PATH that lacks Go's
+	// directory even though `go` runs fine interactively, which previously made
+	// this report "Go is required". Child commands also get the shell's
+	// augmented environment so `go` (and any git/cc it invokes) resolve.
+	goBin, err := e.lookPath("go")
+	if err != nil {
 		return "", fmt.Errorf("raven-update: Go is required to rebuild RavenShell (https://go.dev/dl/)")
 	}
+	env := e.buildEnv()
 
 	// Best-effort refresh of the source tree before building. A dirty tree,
 	// detached HEAD, or no network is fine — build whatever is checked out.
 	if isGitRepo(src) {
 		fmt.Fprintln(e.stdout, "Updating source (git pull --ff-only)...")
-		if out, err := runCaptured(src, "git", "pull", "--ff-only"); err != nil {
+		if out, err := runCaptured(env, src, e.toolPath("git"), "pull", "--ff-only"); err != nil {
 			fmt.Fprintf(e.stdout, "  skipped pull: %s\n", firstLine(out, err))
 		} else if s := strings.TrimSpace(out); s != "" {
 			fmt.Fprintln(e.stdout, "  "+strings.ReplaceAll(s, "\n", "\n  "))
 		}
 	}
 
-	version := gitDescribe(src)
+	version := e.gitDescribe(src)
 
 	// Build into the (writable) source tree, then move the result onto the
 	// target. Building straight into the install dir would need write access
@@ -94,13 +102,13 @@ func (e *Evaluator) execRavenUpdate(args []string) (string, error) {
 	_ = os.Remove(built)
 	fmt.Fprintln(e.stdout, "Building...")
 	ldflags := fmt.Sprintf("-X main.version=%s -X main.sourceDir=%s", version, src)
-	if out, err := runCaptured(src, "go", "build", "-ldflags", ldflags, "-o", built, "."); err != nil {
+	if out, err := runCaptured(env, src, goBin, "build", "-ldflags", ldflags, "-o", built, "."); err != nil {
 		_ = os.Remove(built)
 		return "", fmt.Errorf("raven-update: build failed: %v\n%s", err, out)
 	}
 	defer os.Remove(built)
 
-	if err := replaceBinary(e.stdout, src, built, target); err != nil {
+	if err := e.replaceBinary(src, built, target); err != nil {
 		return "", err
 	}
 
@@ -172,7 +180,10 @@ func isRavenSource(dir string) bool {
 
 // replaceBinary moves the freshly built binary onto target, escalating to sudo
 // only when the install directory is not writable (e.g. /usr/local/bin).
-func replaceBinary(w io.Writer, src, built, target string) error {
+func (e *Evaluator) replaceBinary(src, built, target string) error {
+	w := e.stdout
+	env := e.buildEnv()
+	install := e.toolPath("install")
 	dstDir := filepath.Dir(target)
 	if isWritableDir(dstDir) {
 		// Same-filesystem rename is atomic; fall back to install(1) for the
@@ -180,17 +191,31 @@ func replaceBinary(w io.Writer, src, built, target string) error {
 		if err := os.Rename(built, target); err == nil {
 			return nil
 		}
-		if out, err := runCaptured(src, "install", "-m", "0755", built, target); err != nil {
+		if out, err := runCaptured(env, src, install, "-m", "0755", built, target); err != nil {
 			return fmt.Errorf("raven-update: could not replace %s: %v\n%s", target, err, out)
 		}
 		return nil
 	}
 
 	fmt.Fprintf(w, "Replacing %s requires elevated permissions; using sudo...\n", target)
-	if err := runInteractive(w, src, "sudo", "install", "-m", "0755", built, target); err != nil {
+	if err := runInteractive(w, env, src, e.toolPath("sudo"), "install", "-m", "0755", built, target); err != nil {
 		return fmt.Errorf("raven-update: could not replace %s with sudo: %v", target, err)
 	}
 	return nil
+}
+
+// toolPath resolves an external build tool (go, git, install, sudo) to an
+// absolute path using the shell's own command resolution, which searches the
+// raven-add and built-in default directories in addition to $PATH — important
+// because a GUI-launched shell often inherits a minimal PATH. exec.Command
+// resolves a bare name against the process PATH only, so passing the absolute
+// path is what lets these tools be found. Falls back to the bare name when
+// resolution fails, preserving the prior behavior (and a clear error from exec).
+func (e *Evaluator) toolPath(name string) string {
+	if p, err := e.lookPath(name); err == nil {
+		return p
+	}
+	return name
 }
 
 // warnShadowingBinaries reports other ravenshell executables on PATH. If a
@@ -253,8 +278,8 @@ func isGitRepo(dir string) bool {
 }
 
 // gitDescribe mirrors install.sh's version stamping.
-func gitDescribe(dir string) string {
-	out, err := runCaptured(dir, "git", "describe", "--tags", "--always", "--dirty")
+func (e *Evaluator) gitDescribe(dir string) string {
+	out, err := runCaptured(e.buildEnv(), dir, e.toolPath("git"), "describe", "--tags", "--always", "--dirty")
 	if err != nil {
 		return "dev"
 	}
@@ -280,18 +305,26 @@ func resolve(path string) string {
 	return path
 }
 
-func runCaptured(dir, name string, args ...string) (string, error) {
+// runCaptured runs a command in dir with the given environment (nil inherits
+// the process environment) and returns its combined output.
+func runCaptured(env []string, dir, name string, args ...string) (string, error) {
 	c := exec.Command(name, args...)
 	c.Dir = dir
+	if env != nil {
+		c.Env = env
+	}
 	out, err := c.CombinedOutput()
 	return string(out), err
 }
 
 // runInteractive runs a command wired to the terminal so prompts (e.g. sudo's
-// password prompt) work.
-func runInteractive(w io.Writer, dir, name string, args ...string) error {
+// password prompt) work. env (nil inherits) sets the child environment.
+func runInteractive(w io.Writer, env []string, dir, name string, args ...string) error {
 	c := exec.Command(name, args...)
 	c.Dir = dir
+	if env != nil {
+		c.Env = env
+	}
 	c.Stdin = os.Stdin
 	c.Stdout = w
 	c.Stderr = os.Stderr

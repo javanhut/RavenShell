@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -297,6 +298,25 @@ func shellPrompt(eval *evaluator.Evaluator) string {
 	return makePrompt(eval.GetCwd())
 }
 
+// oscWorkingDir returns the OSC 7 escape that reports dir to the terminal as the
+// current working directory. Terminal emulators (Ghostty, iTerm2, WezTerm,
+// kitty, ...) read OSC 7 to open new tabs and splits in the same directory; a
+// custom shell like RavenShell gets no automatic cwd reporting, so it must emit
+// this itself. The path is encoded as a file://<hostname>/<abs-path> URL. The
+// sequence is zero-width, so it is written straight to the terminal rather than
+// embedded in the width-measured prompt. Returns "" for a non-absolute dir.
+func oscWorkingDir(dir string) string {
+	if !filepath.IsAbs(dir) {
+		return ""
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		host = "localhost"
+	}
+	u := url.URL{Scheme: "file", Host: host, Path: dir}
+	return "\x1b]7;" + u.String() + "\x07"
+}
+
 func repl() {
 	eval := evaluator.New()
 
@@ -342,6 +362,12 @@ func repl() {
 		} else {
 			// Refresh the prompt so it reflects the current directory after cd.
 			rl.SetPrompt(shellPrompt(eval))
+			// Report the cwd to the terminal (OSC 7) so new tabs and splits open
+			// in the same directory. Emitted as its own zero-width sequence, not
+			// through the measured prompt, on every primary prompt (after cd, etc.).
+			if osc := oscWorkingDir(eval.GetCwd()); osc != "" {
+				fmt.Print(osc)
+			}
 		}
 
 		input, err := rl.ReadLine()

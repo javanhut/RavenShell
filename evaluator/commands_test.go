@@ -79,6 +79,49 @@ func TestCdSyncsProcessCwd(t *testing.T) {
 	}
 }
 
+// TestCdUnquotedSpaces verifies cd into a directory whose name contains spaces
+// works without quoting. An unquoted path arrives as multiple args (e.g.
+// `cd Matrix Theory` -> ["Matrix", "Theory"]); cd rejoins them. The first arg
+// alone ("Matrix") is not a directory, so this fails before the fix.
+func TestCdUnquotedSpaces(t *testing.T) {
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	root := t.TempDir()
+	sub := filepath.Join(root, "Matrix Theory")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	e := New()
+	e.cwd = root
+
+	// `cd Matrix Theory/` — note the unquoted space and trailing slash.
+	if _, err := e.execChangeDir([]string{"Matrix", "Theory/"}); err != nil {
+		t.Fatalf("cd Matrix Theory/: %v", err)
+	}
+	if !sameDir(e.GetCwd(), sub) {
+		t.Errorf("e.GetCwd() = %q, want %q", e.GetCwd(), sub)
+	}
+}
+
+// TestCdNonexistentError checks cd reports the path as typed (not an absolute
+// stat() path) when the target does not exist.
+func TestCdNonexistentError(t *testing.T) {
+	e := New()
+	e.cwd = t.TempDir()
+	_, err := e.execChangeDir([]string{"no", "such", "dir"})
+	if err == nil {
+		t.Fatal("expected error for missing directory")
+	}
+	if want := "cd: no such dir: no such file or directory"; err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
 // TestLocationAliases checks that whereami/wai behave like cwd.
 func TestLocationAliases(t *testing.T) {
 	dir := t.TempDir()

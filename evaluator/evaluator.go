@@ -980,19 +980,38 @@ func (e *Evaluator) execChangeDir(args []string) (string, error) {
 		return "", nil
 	}
 
-	target := e.resolvePath(args[0])
-	info, err := os.Stat(target)
-	if err != nil {
-		return "", fmt.Errorf("cd: %v", err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("cd: %s: not a directory", args[0])
+	// An unquoted path containing spaces arrives as multiple args (e.g.
+	// `cd Statistical Methods and Data Analysis/` -> ["Statistical",
+	// "Methods", "and", "Data", "Analysis/"]). Try the whole thing joined
+	// back together first so directories with spaces work without quoting,
+	// then fall back to the first arg alone for the `cd dir extra` case.
+	candidates := []string{strings.Join(args, " ")}
+	if len(args) > 1 {
+		candidates = append(candidates, args[0])
 	}
 
-	if err := e.setCwd(target); err != nil {
-		return "", fmt.Errorf("cd: %v", err)
+	var firstErr error
+	for _, cand := range candidates {
+		target := e.resolvePath(cand)
+		info, err := os.Stat(target)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("cd: %s: no such file or directory", cand)
+			}
+			continue
+		}
+		if !info.IsDir() {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("cd: %s: not a directory", cand)
+			}
+			continue
+		}
+		if err := e.setCwd(target); err != nil {
+			return "", fmt.Errorf("cd: %v", err)
+		}
+		return "", nil
 	}
-	return "", nil
+	return "", firstErr
 }
 
 // setCwd changes the shell's working directory, keeping the evaluator's tracked

@@ -22,9 +22,12 @@ page or binary changes.
   path            Print the completion cache directory.
 
 With no argument, report the cache location and how many commands are cached.
-Completions are also filled in automatically the first time you tab a command;
-'update' just pre-warms the cache. ('update' alone does flags for everything;
-subcommands are scraped lazily per command, or in bulk with --deep.)`
+Completions are also filled in automatically: installing a package with a known
+manager (brew, apt, cargo install, npm i -g, ...) pre-builds the new commands'
+completions and drops any that were uninstalled, and tabbing a command for the
+first time scrapes it on demand. 'update' just pre-warms everything at once.
+('update' alone does flags for everything; subcommands are scraped lazily per
+command, or in bulk with --deep.)`
 
 // execRavenCompletions manages the completion cache that backs fish-style flag
 // and subcommand completion for arbitrary commands.

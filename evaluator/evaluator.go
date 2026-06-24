@@ -595,6 +595,13 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 		return "", nil
 	}
 
+	// Snapshot the installed-command set before a package manager runs so its
+	// effect can be reconciled into the completion cache afterward.
+	var pkgBefore map[string]bool
+	if isPackageOp(name, args) {
+		pkgBefore = e.commandNameSet()
+	}
+
 	c := exec.Command(path, args...)
 	c.Dir = e.cwd
 	c.Stdin = e.stdin
@@ -620,6 +627,13 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 			// A real run error (not just a non-zero exit) - report it.
 			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		}
+	}
+
+	// A package manager that finished successfully may have installed or removed
+	// commands; reconcile their completions so they appear (or disappear)
+	// without a manual `raven-completions update`.
+	if pkgBefore != nil && e.lastStatus == 0 {
+		e.reconcileCompletionsAfterPkgOp(pkgBefore)
 	}
 	return "", nil
 }

@@ -60,6 +60,57 @@ type Spec struct {
 // --help scrape) may run before being abandoned.
 const generatorTimeout = time.Second
 
+// commandWrappers are programs that take another command as their argument and
+// run it (sudo apt …, nice cmd …, nohup cmd …). Completion looks through them
+// so the word after the wrapper completes as a command name and later words
+// complete against the wrapped command's spec, exactly as if the wrapper were
+// not there. ("env" is deliberately absent: in RavenShell it is a built-in that
+// prints the environment, not the command-runner of the same name.)
+var commandWrappers = map[string]bool{
+	"sudo": true, "doas": true, "command": true, "exec": true,
+	"nohup": true, "setsid": true, "nice": true,
+	"stdbuf": true, "time": true,
+}
+
+// wrapperArgOpts lists, per wrapper, the options that consume the following
+// token (e.g. `sudo -u root cmd`), so that token is skipped rather than
+// mistaken for the wrapped command. Options written as --opt=val carry their
+// value inline and are handled by the generic option skip.
+var wrapperArgOpts = map[string]map[string]bool{
+	"sudo":   {"-u": true, "-g": true, "-U": true, "-p": true, "-C": true, "-c": true, "-r": true, "-t": true, "-T": true, "-R": true, "--user": true, "--group": true, "--prompt": true},
+	"doas":   {"-u": true, "-C": true},
+	"nice":   {"-n": true},
+	"stdbuf": {"-i": true, "-o": true, "-e": true},
+}
+
+// unwrapCommand strips leading command wrappers (and the options that belong to
+// them) from words, returning the words of the command actually being run. It
+// stops at the first real command token, so `sudo -u root git` yields `git`.
+// When the wrapper is the last completed word (the command after it is still
+// being typed), the result is empty and the caller completes a command name.
+func unwrapCommand(words []string) []string {
+	for len(words) > 0 && commandWrappers[filepath.Base(words[0])] {
+		argOpts := wrapperArgOpts[filepath.Base(words[0])]
+		rest := words[1:]
+		for len(rest) > 0 {
+			tok := rest[0]
+			switch {
+			case tok == "--":
+				rest = rest[1:] // end of options; next token is the command
+			case strings.HasPrefix(tok, "-") && len(tok) > 1:
+				rest = rest[1:]
+				if argOpts[tok] && len(rest) > 0 {
+					rest = rest[1:] // option takes a separate argument
+				}
+				continue
+			}
+			break
+		}
+		words = rest
+	}
+	return words
+}
+
 // Engine resolves completions for a command line.
 type Engine struct {
 	cwd       func() string
@@ -112,7 +163,18 @@ func (e *Engine) Complete(line string, pos int) []Candidate {
 		words = words[:len(words)-1]
 	}
 
+	// Look through command wrappers (sudo, env, nice, ...) so completion
+	// applies to the command they run, not to the wrapper.
+	words = unwrapCommand(words)
+
 	if len(words) == 0 {
+		// Command position. A word containing a slash (./install.sh,
+		// ../bin/tool, /usr/bin/ls, ~/bin/x) names a path rather than a $PATH
+		// command, so complete it as a file path. Directory candidates keep
+		// their trailing slash, so repeated Tab recurses one level at a time.
+		if strings.Contains(cur, "/") {
+			return finish(e.completePath(cur, false), cur)
+		}
 		return e.completeCommandNames(cur)
 	}
 
@@ -197,6 +259,15 @@ func (e *Engine) Complete(line string, pos int) []Candidate {
 		}
 		files = !argspec.NoFiles
 		dirsOnly = argspec.DirsOnly
+	}
+	// For a command we have no spec for, also offer its flags (scraped from the
+	// man page / --help) at the argument position, so a bare Tab reveals the
+	// tool's options instead of only files. They are still narrowed normally
+	// once a leading '-' is typed (handled by the flag branch above). Commands
+	// with a spec are left alone: their subcommands/arguments are the point, and
+	// flags would just be noise.
+	if spec == nil {
+		out = append(out, e.fallbackFlags(cmd)...)
 	}
 	if files {
 		out = append(out, e.completePath(cur, dirsOnly)...)

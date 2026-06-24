@@ -2,8 +2,10 @@ package completion
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"ravenshell/ansi"
+	"strings"
 	"testing"
 )
 
@@ -156,6 +158,161 @@ func TestPathCompletionKeepsDirPrefix(t *testing.T) {
 	got := e.Complete("someprog src/ma", 15)
 	if len(got) != 1 || got[0].Text != "src/main.go" {
 		t.Fatalf("Complete(someprog src/ma) = %v, want [src/main.go]", texts(got))
+	}
+}
+
+// TestCommandPositionPathCompletion verifies that a command word containing a
+// slash is completed as a file path (./install.sh, ./sub/) rather than as a
+// $PATH command name, and that directories keep their trailing slash so Tab can
+// recurse into them.
+func TestCommandPositionPathCompletion(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "install.sh"), "x")
+	mustWrite(t, filepath.Join(dir, "README.md"), "x")
+	if err := os.Mkdir(filepath.Join(dir, "scripts"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, "scripts", "build.sh"), "x")
+	// No commands are registered, so a path word can only complete via the
+	// file path fallback, not as a command name.
+	e := newTestEngine(dir)
+
+	// ./inst -> ./install.sh, even though install.sh is not on $PATH.
+	if got := e.Complete("./inst", 6); len(got) != 1 || got[0].Text != "./install.sh" {
+		t.Fatalf("Complete(./inst) = %v, want [./install.sh]", texts(got))
+	}
+
+	// ./ lists everything in cwd at the command position.
+	got := e.Complete("./", 2)
+	if !contains(got, "./install.sh") || !contains(got, "./README.md") || !contains(got, "./scripts/") {
+		t.Fatalf("Complete(./) = %v, want install.sh, README.md and scripts/", texts(got))
+	}
+
+	// Recurse one level down a directory in the command position.
+	if got := e.Complete("./scripts/bu", 12); len(got) != 1 || got[0].Text != "./scripts/build.sh" {
+		t.Fatalf("Complete(./scripts/bu) = %v, want [./scripts/build.sh]", texts(got))
+	}
+
+	// A bare word with no slash is still a command name, not a file.
+	if got := e.Complete("inst", 4); len(got) != 0 {
+		t.Fatalf("Complete(inst) = %v, want no command-name matches", texts(got))
+	}
+}
+
+// TestWrapperCompletion verifies that completion looks through command wrappers
+// (sudo, env, ...) to the command they run.
+func TestWrapperCompletion(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "install.sh"), "x")
+	e := newTestEngine(dir, "git", "grep")
+
+	// `sudo gi` completes the wrapped command name.
+	if got := e.Complete("sudo gi", 7); len(got) != 1 || got[0].Text != "git" {
+		t.Fatalf("Complete(sudo gi) = %v, want [git]", texts(got))
+	}
+
+	// `sudo git ch` completes git's subcommands, not files.
+	got := e.Complete("sudo git ch", 11)
+	if len(got) != 2 || got[0].Text != "checkout" || got[1].Text != "cherry-pick" {
+		t.Fatalf("Complete(sudo git ch) = %v, want [checkout cherry-pick]", texts(got))
+	}
+
+	// `sudo ./inst` still path-completes through the wrapper.
+	if got := e.Complete("sudo ./inst", 11); len(got) != 1 || got[0].Text != "./install.sh" {
+		t.Fatalf("Complete(sudo ./inst) = %v, want [./install.sh]", texts(got))
+	}
+
+	// Options that take an argument are skipped (sudo -u root git ch).
+	got = e.Complete("sudo -u root git ch", 19)
+	if len(got) != 2 || got[0].Text != "checkout" || got[1].Text != "cherry-pick" {
+		t.Fatalf("Complete(sudo -u root git ch) = %v, want [checkout cherry-pick]", texts(got))
+	}
+
+	// Wrappers nest: `sudo nice git ch` still reaches git's subcommands.
+	got = e.Complete("sudo nice git ch", 16)
+	if len(got) != 2 || got[0].Text != "checkout" || got[1].Text != "cherry-pick" {
+		t.Fatalf("Complete(sudo nice git ch) = %v, want [checkout cherry-pick]", texts(got))
+	}
+}
+
+func TestUnwrapCommand(t *testing.T) {
+	cases := []struct {
+		in   []string
+		want []string
+	}{
+		{[]string{"git", "status"}, []string{"git", "status"}},
+		{[]string{"sudo", "git"}, []string{"git"}},
+		{[]string{"sudo"}, nil},
+		{[]string{"sudo", "-u", "root", "git"}, []string{"git"}},
+		{[]string{"sudo", "nice", "-n", "5", "git"}, []string{"git"}},
+		{[]string{"/usr/bin/sudo", "git"}, []string{"git"}},
+		{[]string{"sudo", "--", "git"}, []string{"git"}},
+	}
+	for _, c := range cases {
+		got := unwrapCommand(append([]string(nil), c.in...))
+		if len(got) != len(c.want) {
+			t.Errorf("unwrapCommand(%v) = %v, want %v", c.in, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("unwrapCommand(%v) = %v, want %v", c.in, got, c.want)
+				break
+			}
+		}
+	}
+}
+
+// TestBareArgShowsFlags verifies that a command with no spec offers its scraped
+// flags (with descriptions) at the bare argument position, alongside files, so
+// a plain Tab reveals the tool's options. The man cache is seeded directly to
+// avoid shelling out to man in the test.
+func TestBareArgShowsFlags(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "data.txt"), "x")
+	e := newTestEngine(dir)
+	e.manCache["mytool"] = []Candidate{
+		{Text: "-v", Desc: "Verbose output"},
+		{Text: "--help", Desc: "Show help"},
+	}
+
+	// Bare Tab: flags and files together.
+	got := e.Complete("mytool ", 7)
+	if !contains(got, "-v") || !contains(got, "--help") || !contains(got, "data.txt") {
+		t.Fatalf("Complete(mytool ) = %v, want flags and files", texts(got))
+	}
+	// Descriptions are carried through.
+	for _, c := range got {
+		if c.Text == "--help" && c.Desc != "Show help" {
+			t.Errorf("--help desc = %q, want %q", c.Desc, "Show help")
+		}
+	}
+
+	// A leading '-' still narrows to flags only.
+	got = e.Complete("mytool --", 9)
+	if !contains(got, "--help") || contains(got, "data.txt") {
+		t.Fatalf("Complete(mytool --) = %v, want only flags", texts(got))
+	}
+
+	// A file-like prefix matches files, not flags (flags start with '-').
+	got = e.Complete("mytool da", 9)
+	if len(got) != 1 || got[0].Text != "data.txt" {
+		t.Fatalf("Complete(mytool da) = %v, want [data.txt]", texts(got))
+	}
+}
+
+// TestTldrPages checks that the tldr page generator cleans its output: no ANSI
+// escapes, no "Pages for" headers, and no multi-word lines. Skipped when tldr
+// is not installed.
+func TestTldrPages(t *testing.T) {
+	if _, err := exec.LookPath("tldr"); err != nil {
+		t.Skip("tldr not installed")
+	}
+	for _, c := range tldrPages("") {
+		if c.Text == "" || strings.HasPrefix(c.Text, "Pages for") ||
+			strings.ContainsAny(c.Text, " \t") || strings.Contains(c.Text, "\x1b") {
+			t.Errorf("unclean page candidate %q", c.Text)
+		}
 	}
 }
 

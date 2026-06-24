@@ -1,8 +1,10 @@
 package completion
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -274,6 +276,7 @@ func builtinSpecs(e *Engine) map[string]*Spec {
 
 		// Raven built-ins whose arguments are more specific than "any file".
 		"cd":    {Args: &ArgSpec{DirsOnly: true}},
+		"tldr":  {Args: &ArgSpec{Generate: tldrPages, NoFiles: true}},
 		"rmdir": {Flags: []Candidate{{Text: "-f", Desc: "Remove non-empty directories"}, {Text: "--force", Desc: "Remove non-empty directories"}}, Args: &ArgSpec{DirsOnly: true}},
 		"raven-add": {Args: &ArgSpec{Static: []Candidate{
 			{Text: "path", Desc: "Register an extra executable search directory"}}}},
@@ -340,6 +343,34 @@ func makefileTargets(cwd string) []Candidate {
 		}
 	}
 	return nil
+}
+
+// tldrPages lists the available tldr page names via `tldr --list`, the dynamic
+// argument source for `tldr <Tab>` (tldr's argument is a page name, not a file).
+// tldr prints one page per line under colorized "Pages for <platform>" section
+// headers, so ANSI escapes are stripped and header lines skipped. It runs the
+// command itself (bounded by generatorTimeout) rather than going through the
+// engine so it can fit the Generate signature.
+func tldrPages(string) []Candidate {
+	ctx, cancel := context.WithTimeout(context.Background(), generatorTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "tldr", "--list").Output()
+	if err != nil && len(out) == 0 {
+		return nil
+	}
+
+	var cands []Candidate
+	for line := range strings.SplitSeq(string(out), "\n") {
+		line = strings.TrimSpace(ansiSGR.ReplaceAllString(line, ""))
+		// Skip blanks, the "Pages for <platform>" headers, and any multi-word
+		// line that is clearly not a single page name.
+		if line == "" || strings.HasPrefix(line, "Pages for") || strings.ContainsAny(line, " \t") {
+			continue
+		}
+		cands = append(cands, Candidate{Text: line, Desc: "tldr page"})
+	}
+	return cands
 }
 
 // npmScripts reads package.json in cwd and returns its script names, each

@@ -36,6 +36,7 @@ var precedences = map[token.TokenType]int{
 	token.NOT_EQ:   EQUALS,
 	token.LT:       REDIRECT, // Low precedence so redirections bind looser than pipes
 	token.GT:       REDIRECT, // Low precedence so redirections bind looser than pipes
+	token.REDIR:    REDIRECT,
 	token.LTE:      LESSGREATER,
 	token.GTE:      LESSGREATER,
 	token.PLUS:     SUM,
@@ -123,6 +124,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerInfix(token.PIPE, p.parsePipeExpression)
 	p.registerInfix(token.INTO, p.parseRedirectionExpression)
 	p.registerInfix(token.OUT, p.parseRedirectionExpression)
+	p.registerInfix(token.REDIR, p.parseRedirToken)
 	p.registerInfix(token.PLUS, p.parseInfixExpression)
 	p.registerInfix(token.MINUS, p.parseInfixExpression)
 	p.registerInfix(token.ASTERISK, p.parseInfixExpression)
@@ -413,7 +415,7 @@ func isWordBoundary(t token.TokenType) bool {
 	case token.EOF,
 		token.PIPE, token.OR, token.AND, token.AMP,
 		token.SEMICOLON,
-		token.INTO, token.OUT, token.GT, token.GTE, token.LT, token.LTE,
+		token.INTO, token.OUT, token.GT, token.GTE, token.LT, token.LTE, token.REDIR,
 		token.LPAREN, token.RPAREN,
 		token.LBRACE, token.RBRACE,
 		token.LBRACKET, token.RBRACKET:
@@ -807,6 +809,64 @@ func (p *Parser) parseRedirectionExpression(left ast.Expression) ast.Expression 
 	expression.Target = p.parseRedirectionTarget()
 
 	return expression
+}
+
+// parseRedirToken handles a fd-aware REDIR token (2>, 2>&1, &>, >&1, 1>>...).
+// The operator details live in the token literal; for fd duplications there is
+// no file target, otherwise the following word is the target file.
+func (p *Parser) parseRedirToken(left ast.Expression) ast.Expression {
+	expression := &ast.RedirectionExpression{
+		Token:   p.curToken,
+		Command: left,
+	}
+	parseRedirOp(expression, p.curToken.Literal)
+
+	if expression.IsDup {
+		return expression
+	}
+
+	p.nextToken()
+	expression.Target = p.parseRedirectionTarget()
+	return expression
+}
+
+// parseRedirOp fills the fd/type fields of a redirection from its operator
+// literal: an optional leading "&" (both streams) or fd digits, then the
+// >/>>/<<< operator, then an optional "&N" fd-duplication suffix.
+func parseRedirOp(expr *ast.RedirectionExpression, lit string) {
+	if strings.HasPrefix(lit, "&") {
+		expr.Both = true
+		lit = lit[1:]
+	} else {
+		i := 0
+		for i < len(lit) && lit[i] >= '0' && lit[i] <= '9' {
+			i++
+		}
+		if i > 0 {
+			expr.SrcFd, _ = strconv.Atoi(lit[:i])
+			lit = lit[i:]
+		}
+	}
+
+	switch {
+	case strings.HasPrefix(lit, ">>"):
+		expr.Type = ast.REDIR_APPEND
+		lit = lit[2:]
+	case strings.HasPrefix(lit, ">"):
+		expr.Type = ast.REDIR_OUTPUT
+		lit = lit[1:]
+	case strings.HasPrefix(lit, "<<"):
+		expr.Type = ast.REDIR_HEREDOC
+		lit = lit[2:]
+	case strings.HasPrefix(lit, "<"):
+		expr.Type = ast.REDIR_INPUT
+		lit = lit[1:]
+	}
+
+	if strings.HasPrefix(lit, "&") {
+		expr.IsDup = true
+		expr.DupFd, _ = strconv.Atoi(lit[1:])
+	}
 }
 
 // parseRedirectionTarget parses the target of a redirection (always a path/identifier, never a command)

@@ -35,6 +35,64 @@ func TestNextTokenBasics(t *testing.T) {
 	}
 }
 
+// TestRedirOperators checks that fd-aware redirection forms (2>, 2>&1, &>, >&1)
+// become a single REDIR token, while bare >, >>, and spaced comparisons keep
+// their existing token types.
+func TestRedirOperators(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []struct {
+			typ token.TokenType
+			lit string
+		}
+	}{
+		{"cargo test 2>&1", []struct {
+			typ token.TokenType
+			lit string
+		}{
+			{token.IDENT, "cargo"}, {token.IDENT, "test"}, {token.REDIR, "2>&1"}, {token.EOF, ""},
+		}},
+		{"cmd 2>err.log", []struct {
+			typ token.TokenType
+			lit string
+		}{
+			{token.IDENT, "cmd"}, {token.REDIR, "2>"}, {token.IDENT, "err"},
+			{token.FULLSTOP, "."}, {token.IDENT, "log"}, {token.EOF, ""},
+		}},
+		{"cmd &>both 1>>app.log >&2", []struct {
+			typ token.TokenType
+			lit string
+		}{
+			{token.IDENT, "cmd"}, {token.REDIR, "&>"}, {token.IDENT, "both"},
+			{token.REDIR, "1>>"}, {token.IDENT, "app"}, {token.FULLSTOP, "."}, {token.IDENT, "log"},
+			{token.REDIR, ">&2"}, {token.EOF, ""},
+		}},
+		// Bare > / >> and spaced comparison must be unchanged.
+		{"cmd > out", []struct {
+			typ token.TokenType
+			lit string
+		}{
+			{token.IDENT, "cmd"}, {token.GT, ">"}, {token.IDENT, "out"}, {token.EOF, ""},
+		}},
+		{"a > b", []struct {
+			typ token.TokenType
+			lit string
+		}{
+			{token.IDENT, "a"}, {token.GT, ">"}, {token.IDENT, "b"}, {token.EOF, ""},
+		}},
+	}
+
+	for _, tc := range cases {
+		l := NewLexer(tc.input)
+		for i, w := range tc.want {
+			tok := l.NextToken()
+			if tok.Type != w.typ || tok.Literal != w.lit {
+				t.Errorf("%q tok[%d] = {%q %q}, want {%q %q}", tc.input, i, tok.Type, tok.Literal, w.typ, w.lit)
+			}
+		}
+	}
+}
+
 func TestFlagTokens(t *testing.T) {
 	input := `ls -l --all --max-count=5`
 	want := []struct {

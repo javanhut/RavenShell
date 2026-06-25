@@ -70,6 +70,7 @@ type Evaluator struct {
 	searchPaths  []string                          // Extra executable search dirs (raven-add path)
 	defaultPaths []string                          // Standard system executable dirs for this OS
 	stdout       io.Writer                         // Standard output (for redirections)
+	stderr       io.Writer                         // Standard error (for redirections, e.g. 2>file, 2>&1)
 	stdin        io.Reader                         // Standard input (for redirections)
 
 	lastStatus int // exit status of the last command ($?)
@@ -98,6 +99,7 @@ func New() *Evaluator {
 		scopes:    []map[string]Value{global},
 		funcs:     make(map[string]*ast.FunctionStatement),
 		stdout:    os.Stdout,
+		stderr:    os.Stderr,
 		stdin:     os.Stdin,
 		nextJobID: 1,
 	}
@@ -606,7 +608,7 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 	c.Dir = e.cwd
 	c.Stdin = e.stdin
 	c.Stdout = e.stdout
-	c.Stderr = os.Stderr
+	c.Stderr = e.stderr
 	c.Env = e.buildEnv()
 
 	err = c.Run()
@@ -617,7 +619,7 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 		c.Dir = e.cwd
 		c.Stdin = e.stdin
 		c.Stdout = e.stdout
-		c.Stderr = os.Stderr
+		c.Stderr = e.stderr
 		c.Env = e.buildEnv()
 		err = c.Run()
 	}
@@ -752,6 +754,35 @@ func (e *Evaluator) evalPipe(pipe *ast.PipeExpression) (string, error) {
 }
 
 func (e *Evaluator) evalRedirection(redir *ast.RedirectionExpression) (string, error) {
+	// fd duplication (N>&M): point the source fd's sink at the target fd's
+	// current sink, e.g. 2>&1 makes stderr follow wherever stdout goes. This is
+	// what `cmd 2>&1 | tail` relies on: the pipe has already aimed stdout at its
+	// buffer, so stderr now lands there too.
+	if redir.IsDup {
+		src := redir.SrcFd
+		if src == 0 {
+			src = 1
+		}
+		var dup io.Writer
+		switch redir.DupFd {
+		case 1:
+			dup = e.stdout
+		case 2:
+			dup = e.stderr
+		default:
+			return "", fmt.Errorf("unsupported fd duplication target %d", redir.DupFd)
+		}
+		oldOut, oldErr := e.stdout, e.stderr
+		if src == 2 {
+			e.stderr = dup
+		} else {
+			e.stdout = dup
+		}
+		result, err := e.evalExpression(redir.Command)
+		e.stdout, e.stderr = oldOut, oldErr
+		return result, err
+	}
+
 	// Get target filename
 	target, err := e.evalExpression(redir.Target)
 	if err != nil {
@@ -762,32 +793,29 @@ func (e *Evaluator) evalRedirection(redir *ast.RedirectionExpression) (string, e
 	targetPath := e.resolvePath(target)
 
 	switch redir.Type {
-	case ast.REDIR_OUTPUT:
-		// Overwrite file
-		file, err := os.Create(targetPath)
+	case ast.REDIR_OUTPUT, ast.REDIR_APPEND:
+		flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		if redir.Type == ast.REDIR_APPEND {
+			flags = os.O_APPEND | os.O_CREATE | os.O_WRONLY
+		}
+		file, err := os.OpenFile(targetPath, flags, 0644)
 		if err != nil {
 			return "", fmt.Errorf("cannot create file %s: %v", target, err)
 		}
 		defer file.Close()
 
-		oldStdout := e.stdout
-		e.stdout = file
-		result, err := e.evalExpression(redir.Command)
-		e.stdout = oldStdout
-		return result, err
-
-	case ast.REDIR_APPEND:
-		// Append to file
-		file, err := os.OpenFile(targetPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return "", fmt.Errorf("cannot open file %s: %v", target, err)
+		// &>file sends both streams to the file; N>file targets the chosen fd
+		// (default stdout); the rest send stdout.
+		oldOut, oldErr := e.stdout, e.stderr
+		if redir.Both {
+			e.stdout, e.stderr = file, file
+		} else if redir.SrcFd == 2 {
+			e.stderr = file
+		} else {
+			e.stdout = file
 		}
-		defer file.Close()
-
-		oldStdout := e.stdout
-		e.stdout = file
 		result, err := e.evalExpression(redir.Command)
-		e.stdout = oldStdout
+		e.stdout, e.stderr = oldOut, oldErr
 		return result, err
 
 	case ast.REDIR_INPUT:

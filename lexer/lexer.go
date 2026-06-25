@@ -115,6 +115,9 @@ func (l *Lexer) scanToken() token.Token {
 			l.advance()
 			return token.Token{Type: token.AND, Literal: l.input[start:l.pos]}
 		}
+		if l.peekNext() == '>' { // &> or &>>: redirect both stdout and stderr
+			return l.scanRedirFrom(l.pos)
+		}
 		return token.Token{Type: token.AMP, Literal: string(l.advance())}
 	case '.':
 		return token.Token{Type: token.FULLSTOP, Literal: string(l.advance())}
@@ -202,6 +205,9 @@ func (l *Lexer) scanToken() token.Token {
 		}
 		return token.Token{Type: token.ILLEGAL, Literal: string(l.advance())}
 	case '>':
+		if l.peekNext() == '&' { // >&1: duplicate stdout onto another fd
+			return l.scanRedirFrom(l.pos)
+		}
 		if l.peekNext() == '>' {
 			start := l.pos
 			l.advance()
@@ -217,6 +223,9 @@ func (l *Lexer) scanToken() token.Token {
 			return token.Token{Type: token.GT, Literal: string(l.advance())}
 		}
 	case '<':
+		if l.peekNext() == '&' { // <&0: duplicate an fd onto stdin
+			return l.scanRedirFrom(l.pos)
+		}
 		if l.peekNext() == '<' {
 			start := l.pos
 			l.advance()
@@ -284,6 +293,12 @@ func (l *Lexer) scanToken() token.Token {
 		for unicode.IsDigit(rune(l.peek())) {
 			l.advance()
 		}
+		// Digits glued directly to a redirection operator are an fd prefix
+		// (e.g. 2>file, 2>&1, 1>>log), not an integer literal. Spaced digits
+		// like `a > b` are unaffected since whitespace was already skipped.
+		if l.peek() == '>' || l.peek() == '<' {
+			return l.scanRedirFrom(start)
+		}
 		return token.Token{Type: token.INTEGER, Literal: l.input[start:l.pos]}
 	} else if unicode.IsLetter(rune(ch)) || ch == '_' {
 		start := l.pos
@@ -310,6 +325,30 @@ func (l *Lexer) scanToken() token.Token {
 		return token.Token{Type: token.IDENT, Literal: literal}
 	}
 	return token.Token{Type: token.ILLEGAL, Literal: string(l.advance())}
+}
+
+// scanRedirFrom builds a single fd-aware redirection token starting at byte
+// offset `start`. The lexer position must sit at the first operator char: '&'
+// (for &>/&>>), '>' or '<' (optionally with an fd prefix already consumed into
+// start). It consumes the operator, any >>/<< doubling, and an optional '&N'
+// fd-duplication suffix, so forms like 2>, 2>>, &>, >&1, and 2>&1 each become
+// one REDIR token whose literal is the exact operator text.
+func (l *Lexer) scanRedirFrom(start int) token.Token {
+	if l.peek() == '&' { // &> / &>>
+		l.advance()
+	}
+	op := l.peek() // '>' or '<'
+	l.advance()
+	if l.peek() == op { // >> or <<
+		l.advance()
+	}
+	if l.peek() == '&' { // fd duplication: >&1, 2>&1
+		l.advance()
+		for unicode.IsDigit(rune(l.peek())) {
+			l.advance()
+		}
+	}
+	return token.Token{Type: token.REDIR, Literal: l.input[start:l.pos]}
 }
 
 func isAlphanumeric(ch byte) bool {

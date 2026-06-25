@@ -268,7 +268,12 @@ type RedirectionExpression struct {
 	Token   token.Token     // The redirection token (>, >>, <)
 	Type    RedirectionType // Type of redirection
 	Command Expression      // The command being redirected
-	Target  Expression      // The file target
+	Target  Expression      // The file target (nil when IsDup)
+
+	SrcFd int  // explicit source fd (e.g. 2 in 2>file); 0 means the default for Type
+	DupFd int  // target fd when IsDup (e.g. 1 in 2>&1)
+	IsDup bool // N>&M form: duplicate one fd onto another instead of a file
+	Both  bool // &> form: redirect both stdout and stderr
 }
 
 func (re *RedirectionExpression) expressionNode()      {}

@@ -96,6 +96,7 @@ const (
 	GT       TokenType = "GT"       // > (for comparisons, different from GREATER for redirection)
 	LTE      TokenType = "LTE"      // <=
 	GTE      TokenType = "GTE"      // >=
+	REDIR    TokenType = "REDIR"    // fd-aware redirection operator: 2>, 2>&1, &>, >&1
 
 	// Command sequencing
 	SEMICOLON TokenType = "SEMICOLON" // ;

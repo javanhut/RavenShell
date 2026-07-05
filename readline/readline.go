@@ -990,6 +990,19 @@ func (r *Readline) applyCompletion(line []rune, pos int, completion string, addS
 		}
 	}
 
+	// A trailing "/" marks a directory (no trailing space, so further
+	// completion is invited). Decide this on the raw text, before quoting.
+	isDir := strings.HasSuffix(completion, "/")
+
+	// Quote a completed candidate that contains spaces or shell metacharacters
+	// so it round-trips through the lexer as one argument (e.g.
+	// "The World's Strongest Rearguard/"). Only full-candidate insertions are
+	// quoted; common-prefix extensions (addSpace == false) are partial words
+	// and must stay bare so the next keystrokes can extend them.
+	if addSpace {
+		completion = quoteCompletion(completion)
+	}
+
 	// Build new line
 	newLine := string(line[:wordStart]) + completion
 	rest := ""
@@ -998,12 +1011,53 @@ func (r *Readline) applyCompletion(line []rune, pos int, completion string, addS
 	}
 
 	// Add space after completion if it's not a directory
-	if addSpace && !strings.HasSuffix(completion, "/") {
+	if addSpace && !isDir {
 		newLine += " "
 	}
 	newLine += rest
 
 	return []rune(newLine), len([]rune(newLine)) - len([]rune(rest))
+}
+
+// quoteCompletion wraps a completion candidate in quotes when it contains
+// characters the lexer would otherwise split on (spaces, apostrophes, and other
+// shell metacharacters), so the inserted word round-trips as a single argument.
+// Single quotes are preferred (fully literal — no variable expansion); a
+// candidate containing an apostrophe falls back to double quotes. A leading
+// "~/" is kept outside the quotes so home-directory expansion still fires.
+//
+// ponytail: a name containing both ' and one of $ " ` is not representable by
+// this lexer (double quotes interpolate, single quotes can't hold the '); it is
+// returned double-quoted anyway. Such filenames don't occur in practice; the
+// upgrade path is backslash-escape support in the lexer.
+func quoteCompletion(text string) string {
+	if !needsQuoting(text) {
+		return text
+	}
+	prefix := ""
+	if strings.HasPrefix(text, "~/") {
+		prefix, text = "~/", text[2:]
+	}
+	if strings.ContainsRune(text, '\'') {
+		return prefix + `"` + text + `"`
+	}
+	return prefix + "'" + text + "'"
+}
+
+// needsQuoting reports whether text contains any character outside the set the
+// lexer scans as a bare word: letters, digits, and the path-safe punctuation
+// . _ - / ~ . Anything else (space, ' " and shell metacharacters) would split
+// the word into multiple tokens, so it must be quoted.
+func needsQuoting(text string) bool {
+	for _, r := range text {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-', r == '/', r == '~':
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // SetPrompt changes the prompt. A multi-line prompt is split: every line but

@@ -161,6 +161,37 @@ func TestApplyCompletionSpace(t *testing.T) {
 	}
 }
 
+// TestApplyCompletionQuoting covers wrapping candidates with spaces / special
+// characters so the inserted word round-trips through the lexer.
+func TestApplyCompletionQuoting(t *testing.T) {
+	r := newTestReadline()
+	cases := []struct {
+		name       string
+		line       string
+		completion string
+		addSpace   bool
+		want       string
+	}{
+		// Apostrophe forces double quotes (single quotes can't hold a ').
+		{"apostrophe dir", "cd The", "The World's Strongest Rearguard/", true,
+			`cd "The World's Strongest Rearguard/"`},
+		// A plain space uses single quotes (literal, no $ expansion).
+		{"space dir", "cd My", "My Documents/", true, "cd 'My Documents/'"},
+		// No special chars: inserted bare, with the usual trailing space.
+		{"plain file", "cat re", "readme.md", true, "cat readme.md "},
+		// Common-prefix (addSpace=false) must stay bare even with a space.
+		{"prefix stays bare", "cd My", "My Doc", false, "cd My Doc"},
+		// A leading ~/ stays outside the quotes so it still expands.
+		{"home path", "cd ~/My", "~/My Docs/", true, "cd ~/'My Docs/'"},
+	}
+	for _, c := range cases {
+		line, _ := r.applyCompletion([]rune(c.line), len([]rune(c.line)), c.completion, c.addSpace)
+		if string(line) != c.want {
+			t.Errorf("%s: applyCompletion = %q, want %q", c.name, string(line), c.want)
+		}
+	}
+}
+
 // TestDisplayWidth covers the ANSI-aware width used to compute how many rows the
 // wrapped prompt+line occupy. Color codes must contribute zero cells.
 func TestDisplayWidth(t *testing.T) {

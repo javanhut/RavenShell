@@ -100,6 +100,21 @@ func TestUnknownSubcommandFallsBackToFiles(t *testing.T) {
 	}
 }
 
+// A directory whose name contains spaces and an apostrophe must still complete
+// to a single candidate carrying the full name; readline quotes it on insert.
+func TestCompleteDirWithSpacesAndApostrophe(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "The World's Strongest Rearguard"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	e := newTestEngine(dir)
+
+	got := e.Complete("cd The", 6)
+	if len(got) != 1 || got[0].Text != "The World's Strongest Rearguard/" {
+		t.Fatalf("Complete(cd The) = %v, want [The World's Strongest Rearguard/]", texts(got))
+	}
+}
+
 func TestUnknownCommandCompletesFiles(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "alpha.txt"), "x")

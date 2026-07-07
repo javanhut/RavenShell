@@ -376,6 +376,19 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 			sb.WriteString(e.valueToString(val))
 		}
 		return sb.String(), nil
+	case *ast.BraceExpression:
+		// Expand the literal brace group into a list of argument strings. The
+		// []Value result is splatted into multiple arguments by evalArgs.
+		inner, err := e.evalExpressionValue(node.Word)
+		if err != nil {
+			return nil, err
+		}
+		words := braceExpand(e.valueToString(inner))
+		vals := make([]Value, len(words))
+		for i, w := range words {
+			vals[i] = w
+		}
+		return vals, nil
 	case *ast.InfixExpression:
 		return e.evalInfixExpression(node)
 	case *ast.CallExpression:
@@ -1823,6 +1836,176 @@ func (e *Evaluator) builtinReplace(args []Value) (Value, error) {
 	old := e.valueToString(args[1])
 	newStr := e.valueToString(args[2])
 	return strings.ReplaceAll(s, old, newStr), nil
+}
+
+// braceExpand performs shell brace expansion on one word: {a,b} comma lists,
+// {1..5}/{a..e} sequences (with an optional {1..9..2} step and zero-padding),
+// nesting ({a,{b,c}}), and cross products ({a,b}{c,d}). A word with no valid
+// brace group expands to just itself.
+func braceExpand(s string) []string {
+	pre, body, post, ok := splitFirstBraceGroup(s)
+	if !ok {
+		return []string{s}
+	}
+
+	var alts []string
+	if seq := expandBraceSequence(body); seq != nil {
+		alts = seq
+	} else if parts := splitTopLevelCommas(body); len(parts) > 1 {
+		alts = parts
+	} else {
+		// A single element with no ',' or valid '..' is not an expansion: keep
+		// the braces literal and expand only what follows them.
+		out := []string{}
+		for _, tail := range braceExpand(post) {
+			out = append(out, pre+"{"+body+"}"+tail)
+		}
+		return out
+	}
+
+	// Cross the alternatives (each possibly nested) with the expansions of the
+	// text that follows the group.
+	tails := braceExpand(post)
+	out := []string{}
+	for _, alt := range alts {
+		for _, sub := range braceExpand(alt) {
+			for _, tail := range tails {
+				out = append(out, pre+sub+tail)
+			}
+		}
+	}
+	return out
+}
+
+// splitFirstBraceGroup splits s around the first balanced { ... } group into the
+// text before it, the content between the braces, and the text after the close.
+// ok is false when there is no '{' or it never balances.
+func splitFirstBraceGroup(s string) (pre, body, post string, ok bool) {
+	open := strings.IndexByte(s, '{')
+	if open < 0 {
+		return "", "", "", false
+	}
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[:open], s[open+1 : i], s[i+1:], true
+			}
+		}
+	}
+	return "", "", "", false
+}
+
+// splitTopLevelCommas splits s on commas that are not nested inside inner braces.
+func splitTopLevelCommas(s string) []string {
+	parts := []string{}
+	depth, start := 0, 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(parts, s[start:])
+}
+
+// expandBraceSequence expands a numeric or single-character sequence body
+// ("1..5", "a..e", "1..9..2") into its elements, or returns nil when body is not
+// a valid sequence.
+func expandBraceSequence(body string) []string {
+	f := strings.Split(body, "..")
+	if len(f) != 2 && len(f) != 3 {
+		return nil
+	}
+	step := 1
+	if len(f) == 3 {
+		n, err := strconv.Atoi(f[2])
+		if err != nil || n == 0 {
+			return nil
+		}
+		step = n
+		if step < 0 {
+			step = -step
+		}
+	}
+
+	if lo, loErr := strconv.Atoi(f[0]); loErr == nil {
+		if hi, hiErr := strconv.Atoi(f[1]); hiErr == nil {
+			width := 0
+			if isZeroPadded(f[0]) || isZeroPadded(f[1]) {
+				width = max(len(f[0]), len(f[1]))
+			}
+			return intSequence(lo, hi, step, width)
+		}
+	}
+	if len(f[0]) == 1 && len(f[1]) == 1 && isAlpha(f[0][0]) && isAlpha(f[1][0]) {
+		return charSequence(int(f[0][0]), int(f[1][0]), step)
+	}
+	return nil
+}
+
+func intSequence(lo, hi, step, width int) []string {
+	out := []string{}
+	if lo <= hi {
+		for v := lo; v <= hi; v += step {
+			out = append(out, padInt(v, width))
+		}
+	} else {
+		for v := lo; v >= hi; v -= step {
+			out = append(out, padInt(v, width))
+		}
+	}
+	return out
+}
+
+func charSequence(lo, hi, step int) []string {
+	out := []string{}
+	if lo <= hi {
+		for c := lo; c <= hi; c += step {
+			out = append(out, string(rune(c)))
+		}
+	} else {
+		for c := lo; c >= hi; c -= step {
+			out = append(out, string(rune(c)))
+		}
+	}
+	return out
+}
+
+// padInt formats v left-padded with zeros to width (keeping any leading '-').
+func padInt(v, width int) string {
+	s := strconv.Itoa(v)
+	if width == 0 {
+		return s
+	}
+	sign := ""
+	if v < 0 {
+		sign, s = "-", s[1:]
+	}
+	for len(sign)+len(s) < width {
+		s = "0" + s
+	}
+	return sign + s
+}
+
+func isZeroPadded(s string) bool {
+	s = strings.TrimPrefix(s, "-")
+	return len(s) > 1 && s[0] == '0'
+}
+
+func isAlpha(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // builtinGlob expands a shell glob pattern against the current directory and

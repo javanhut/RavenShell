@@ -401,7 +401,19 @@ func (p *Parser) parseArguments() []ast.Expression {
 // Only true shell boundaries (pipes, redirections, sequencing, grouping) stop
 // the argument list.
 func (p *Parser) peekStartsArgument() bool {
+	// A '{' begins an argument only when it opens a valid brace-expansion group
+	// (mkdir {a,b}); otherwise it is a control-flow block boundary (while x {).
+	if p.peekTokenIs(token.LBRACE) {
+		return p.peekStartsBraceGroup()
+	}
 	return !isWordBoundary(p.peekToken.Type)
+}
+
+// peekStartsBraceGroup reports whether the '{' peek token opens a valid brace
+// expansion group. The lexer's position sits just past the peek token, so for a
+// '{' peek it is exactly the position after the brace.
+func (p *Parser) peekStartsBraceGroup() bool {
+	return p.peekTokenIs(token.LBRACE) && p.l.BraceGroupClosesAt(p.l.GetPos())
 }
 
 // isWordBoundary reports whether a token type terminates an argument word
@@ -443,6 +455,8 @@ func (p *Parser) parseArgument() ast.Expression {
 	var word strings.Builder   // full text, used to classify a pure-literal word
 	sawExpansion := false
 	tokenCount := 0
+	braceDepth := 0    // open '{' groups glued into the current word
+	hasBrace := false  // word contains a literal brace group to expand
 
 	flushLit := func() {
 		if lit.Len() > 0 {
@@ -475,6 +489,17 @@ func (p *Parser) parseArgument() ast.Expression {
 			lit.WriteString(p.curToken.Literal)
 			word.WriteString(p.curToken.Literal)
 		}
+		// Track glued brace groups (foo{a,b}, {1..3}) so their delimiters are
+		// absorbed as literal word text instead of ending the word.
+		switch p.curToken.Type {
+		case token.LBRACE:
+			braceDepth++
+			hasBrace = true
+		case token.RBRACE:
+			if braceDepth > 0 {
+				braceDepth--
+			}
+		}
 		tokenCount++
 
 		// Extend the word only across tokens that are directly glued (no
@@ -483,6 +508,17 @@ func (p *Parser) parseArgument() ast.Expression {
 			break
 		}
 		if isWordBoundary(p.peekToken.Type) {
+			// A '{' glued to the word is never a block (blocks are always
+			// whitespace-separated), so it is word text; and a '}' closes an
+			// open group. Absorb both instead of ending the word.
+			if p.peekTokenIs(token.LBRACE) {
+				p.nextToken()
+				continue
+			}
+			if braceDepth > 0 && p.peekTokenIs(token.RBRACE) {
+				p.nextToken()
+				continue
+			}
 			break
 		}
 		p.nextToken()
@@ -491,35 +527,44 @@ func (p *Parser) parseArgument() ast.Expression {
 
 	// Words containing an expansion stay composite (or collapse to the lone
 	// expansion part).
+	var result ast.Expression
 	if sawExpansion {
 		if len(parts) == 1 {
-			return parts[0]
+			result = parts[0]
+		} else {
+			result = &ast.WordExpression{Token: firstTok, Parts: parts}
 		}
-		return &ast.WordExpression{Token: firstTok, Parts: parts}
+	} else {
+		// Pure-literal word: pick the node shape that matches its content.
+		text := word.String()
+		single := tokenCount == 1
+		switch {
+		case firstTok.Type == token.FULLSTOP || firstTok.Type == token.FSLASH || firstTok.Type == token.TILDE:
+			result = &ast.PathExpression{Token: firstTok, Value: text}
+		case single && firstTok.Type == token.FLAG:
+			// A standalone flag (-l, --all, +x) keeps its StringLiteral shape.
+			result = &ast.StringLiteral{Token: firstTok, Value: text}
+		case single && firstTok.Type == token.INTEGER:
+			result = &ast.IntegerLiteral{Token: firstTok, Value: parseIntLiteral(text)}
+		case strings.ContainsAny(text, "./"):
+			// Anything with a dot or slash is a path (file.txt, foo/bar, *.txt).
+			result = &ast.PathExpression{Token: firstTok, Value: text}
+		case isCleanWord(text):
+			// A plain word (letters, digits, _, -) is a bare identifier.
+			result = &ast.Identifier{Token: firstTok, Value: text}
+		default:
+			// Operator-containing words (g+w, +%Y-%m-%d, image:tag, a lone +) are
+			// passed through verbatim as a path-like literal.
+			result = &ast.PathExpression{Token: firstTok, Value: text}
+		}
 	}
 
-	// Pure-literal word: pick the node shape that matches its content.
-	text := word.String()
-	single := tokenCount == 1
-	switch {
-	case firstTok.Type == token.FULLSTOP || firstTok.Type == token.FSLASH || firstTok.Type == token.TILDE:
-		return &ast.PathExpression{Token: firstTok, Value: text}
-	case single && firstTok.Type == token.FLAG:
-		// A standalone flag (-l, --all, +x) keeps its StringLiteral shape.
-		return &ast.StringLiteral{Token: firstTok, Value: text}
-	case single && firstTok.Type == token.INTEGER:
-		return &ast.IntegerLiteral{Token: firstTok, Value: parseIntLiteral(text)}
-	case strings.ContainsAny(text, "./"):
-		// Anything with a dot or slash is a path (file.txt, foo/bar, *.txt).
-		return &ast.PathExpression{Token: firstTok, Value: text}
-	case isCleanWord(text):
-		// A plain word (letters, digits, _, -) is a bare identifier.
-		return &ast.Identifier{Token: firstTok, Value: text}
-	default:
-		// Operator-containing words (g+w, +%Y-%m-%d, image:tag, a lone +) are
-		// passed through verbatim as a path-like literal.
-		return &ast.PathExpression{Token: firstTok, Value: text}
+	// A word with a literal brace group is expanded into one or more arguments
+	// at evaluation time.
+	if hasBrace {
+		return &ast.BraceExpression{Token: firstTok, Word: result}
 	}
+	return result
 }
 
 // parseIntLiteral parses a base-10 integer word into an int64, returning 0 if it

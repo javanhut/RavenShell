@@ -234,6 +234,21 @@ func (we *WordExpression) String() string {
 	return out.String()
 }
 
+// BraceExpression wraps an argument word that contains a literal brace group
+// (foo{a,b}, {1..3}, src/{a,b}.txt). At evaluation time its inner word is
+// evaluated to a string and brace-expanded into one or more argument strings,
+// which the command receives as separate arguments. Braces from a variable's
+// value or a quoted string are never wrapped here, so only literal braces
+// expand (matching shell order-of-expansion).
+type BraceExpression struct {
+	Token token.Token // the word's first token
+	Word  Expression  // the underlying word (Path/String/Identifier/WordExpression)
+}
+
+func (be *BraceExpression) expressionNode()      {}
+func (be *BraceExpression) TokenLiteral() string { return be.Token.Literal }
+func (be *BraceExpression) String() string       { return be.Word.String() }
+
 // PipeExpression represents a pipe between commands
 type PipeExpression struct {
 	Token token.Token // The PIPE token '|'

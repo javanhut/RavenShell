@@ -24,6 +24,37 @@ func (l *Lexer) SetPos(pos int) {
 	l.pos = pos
 }
 
+// BraceGroupClosesAt reports whether the text starting at pos (the position just
+// past an opening '{') forms a valid brace-expansion group: it balances to a
+// matching '}' with a top-level ',' or '..', and contains no whitespace. The
+// parser uses it to tell an argument like {a,b} from a control-flow block '{'.
+func (l *Lexer) BraceGroupClosesAt(pos int) bool {
+	depth := 1
+	sawSep := false
+	for i := pos; i < len(l.input); i++ {
+		switch l.input[i] {
+		case ' ', '\t', '\n', '\r':
+			return false // whitespace inside braces: not an expansion
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return sawSep
+			}
+		case ',':
+			if depth == 1 {
+				sawSep = true
+			}
+		case '.':
+			if depth == 1 && i+1 < len(l.input) && l.input[i+1] == '.' {
+				sawSep = true // {1..5}-style sequence
+			}
+		}
+	}
+	return false
+}
+
 func (l *Lexer) peek() byte {
 	if l.pos >= len(l.input) {
 		return 0

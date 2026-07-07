@@ -490,6 +490,40 @@ print glob("src/*.go")              # directory patterns work too
 
 `glob()` returns an empty array when nothing matches.
 
+### Brace Expansion
+
+A command argument containing a brace group is expanded into multiple arguments
+before the command runs. Expansion is textual and happens on literal braces
+only — it is not a filesystem lookup, so the results need not exist.
+
+```rsh
+mkdir -p s01/{ep1,ep2}   # -> mkdir -p s01/ep1 s01/ep2
+touch file{1,2}.txt      # -> touch file1.txt file2.txt
+cp report{,.bak}         # -> cp report report.bak  (empty element allowed)
+```
+
+Groups combine and nest, and a prefix/suffix is applied to every element:
+
+| Form | Expands to |
+|------|-----------|
+| `{a,b,c}` | `a b c` |
+| `pre{a,b}post` | `preapost prebpost` |
+| `{a,b}{c,d}` | `ac ad bc bd` (cross product) |
+| `{a,{b,c}}` | `a b c` (nested) |
+| `{1..5}` | `1 2 3 4 5` (numeric sequence) |
+| `{5..1}` | `5 4 3 2 1` (descending) |
+| `{01..03}` | `01 02 03` (zero-padded) |
+| `{1..9..2}` | `1 3 5 7 9` (with step) |
+| `{a..e}` | `a b c d e` (character sequence) |
+
+A brace group that would not expand is left untouched as literal text: a group
+with no comma or `..` sequence (`{a}`, `a{b}c`) and an unbalanced brace (`{a,b`)
+stay exactly as written. Braces inside quotes (`"{a,b}"`) and braces coming from
+a variable's value are never expanded.
+
+Brace expansion applies in command-argument position. To build a list in an
+expression (e.g. a `for` loop), use an array: `for x in [1, 2, 3] { ... }`.
+
 ## Arrays
 
 ### Creating Arrays

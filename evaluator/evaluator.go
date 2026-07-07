@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"ravenshell/ansi"
 	"ravenshell/ast"
+	"ravenshell/token"
 	"runtime"
 	"slices"
 	"sort"
@@ -375,7 +376,15 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 			}
 			sb.WriteString(e.valueToString(val))
 		}
-		return sb.String(), nil
+		word := sb.String()
+		// A word that began with a bare '~' token (e.g. ~/Downloads/"a b.mp4")
+		// still gets tilde expansion — the '~' is unquoted, only a later part is
+		// quoted. Words led by a quoted "~..." keep the token type of the string,
+		// so their tilde stays literal, matching shell semantics.
+		if node.Token.Type == token.TILDE {
+			word = e.expandHome(word)
+		}
+		return word, nil
 	case *ast.BraceExpression:
 		// Expand the literal brace group into a list of argument strings. The
 		// []Value result is splatted into multiple arguments by evalArgs.

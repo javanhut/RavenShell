@@ -222,6 +222,27 @@ func TestPathArgPassedVerbatim(t *testing.T) {
 	}
 }
 
+// TestTildeExpansionInQuotedWord covers a word that starts with a bare '~' but
+// has a quoted segment glued on (e.g. ~/dl/"a b.mp4"). The quote makes it a
+// composite WordExpression; the leading unquoted '~' must still expand, while a
+// word led by a quoted "~..." keeps its tilde literal, as in bash.
+func TestTildeExpansionInQuotedWord(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	cases := []struct{ src, want string }{
+		{`echo ~/dl/"Episode 2.mp4"`, filepath.Join(home, "dl/Episode 2.mp4")},
+		{`echo "~/foo"bar`, "~/foobar"}, // quoted tilde stays literal
+	}
+	for _, tc := range cases {
+		_, out := run(t, tc.src)
+		if got := strings.TrimSpace(out); got != tc.want {
+			t.Errorf("%s => %q, want %q", tc.src, got, tc.want)
+		}
+	}
+}
+
 // TestResolvePathJoinsCwd confirms the other half: builtins still resolve their
 // path args against the shell's tracked cwd (the shell never calls os.Chdir).
 func TestResolvePathJoinsCwd(t *testing.T) {

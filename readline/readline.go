@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -293,7 +294,7 @@ func (r *Readline) ReadLine() (string, error) {
 			}
 
 		case keyCtrlR: // Reverse incremental history search
-			nl, np, submit := r.reverseSearch()
+			nl, np, submit := r.reverseSearch(line)
 			if submit {
 				r.draw(nl, len(nl), "")
 				fmt.Print("\r\n")
@@ -322,7 +323,7 @@ func (r *Readline) ReadLine() (string, error) {
 				// candidates (fish-style); once nothing more can be inserted,
 				// a further Tab shows the listing.
 				word := currentWord(string(line[:pos]))
-				if cp := commonPrefix(completions); len(cp) > len(word) {
+				if cp := commonPrefix(completions); len([]rune(cp)) > len([]rune(word)) {
 					line, pos = r.applyCompletion(line, pos, cp, false)
 					r.refresh(line, pos)
 				} else {
@@ -499,22 +500,13 @@ func parseCursorColumn(resp string) (int, bool) {
 // reverseSearch runs an incremental reverse history search (Ctrl-R). It returns
 // the resulting line, cursor position, and whether the user submitted it
 // (pressed Enter) versus accepting it for further editing.
-func (r *Readline) reverseSearch() ([]rune, int, bool) {
+func (r *Readline) reverseSearch(original []rune) ([]rune, int, bool) {
 	query := []rune{}
 	matchIdx := -1
 	match := ""
 
 	find := func(from int) (int, string) {
-		q := string(query)
-		if from >= len(r.history) {
-			from = len(r.history) - 1
-		}
-		for i := from; i >= 0; i-- {
-			if strings.Contains(r.history[i], q) {
-				return i, r.history[i]
-			}
-		}
-		return -1, ""
+		return historyMatch(r.history, string(query), from)
 	}
 
 	render := func() {
@@ -535,11 +527,11 @@ func (r *Readline) reverseSearch() ([]rune, int, bool) {
 			if match != "" {
 				return []rune(match), len([]rune(match)), true
 			}
-			return []rune{}, 0, false
+			return append([]rune(nil), original...), len(original), false
 
 		case b == keyCtrlC || b == keyEscape:
-			// Cancel: drop back to an empty editing line.
-			return []rune{}, 0, false
+			// Cancel: restore the line that was being edited before search.
+			return append([]rune(nil), original...), len(original), false
 
 		case b == keyCtrlR:
 			// Move to the next older match.
@@ -569,6 +561,43 @@ func (r *Readline) reverseSearch() ([]rune, int, bool) {
 			return []rune(match), len([]rune(match)), false
 		}
 	}
+}
+
+// historyMatch returns the newest matching entry at or before from. Normal
+// case-insensitive substring matches retain traditional reverse-search
+// semantics. If none exist, a subsequence fallback makes abbreviations such as
+// "gst" find "git status" without letting a weak fuzzy hit outrank a literal
+// one.
+func historyMatch(history []string, query string, from int) (int, string) {
+	if from >= len(history) {
+		from = len(history) - 1
+	}
+	if from < 0 {
+		return -1, ""
+	}
+
+	q := []rune(strings.ToLower(query))
+	for i := from; i >= 0; i-- {
+		if strings.Contains(strings.ToLower(history[i]), string(q)) {
+			return i, history[i]
+		}
+	}
+	if len(q) == 0 {
+		return -1, ""
+	}
+	for i := from; i >= 0; i-- {
+		text := []rune(strings.ToLower(history[i]))
+		matched := 0
+		for _, ch := range text {
+			if matched < len(q) && ch == q[matched] {
+				matched++
+			}
+		}
+		if matched == len(q) {
+			return i, history[i]
+		}
+	}
+	return -1, ""
 }
 
 // refresh redraws the line, showing a dim autosuggestion from history when the
@@ -863,17 +892,39 @@ func (r *Readline) completePath(prefix string) []string {
 	return matches
 }
 
-// currentWord returns the whitespace-delimited word being completed at the
-// end of the given line prefix ("" when the prefix ends in a space).
+// currentWord returns the logical word being completed at the end of the line,
+// with surrounding/incomplete shell quotes removed. Whitespace inside quotes
+// remains part of the word.
 func currentWord(beforeCursor string) string {
-	if beforeCursor == "" || beforeCursor[len(beforeCursor)-1] == ' ' {
+	var word []rune
+	var quote rune
+	active := false
+	for _, ch := range beforeCursor {
+		if quote != 0 {
+			active = true
+			if ch == quote {
+				quote = 0
+			} else {
+				word = append(word, ch)
+			}
+			continue
+		}
+		switch {
+		case ch == '\'' || ch == '"':
+			active = true
+			quote = ch
+		case unicode.IsSpace(ch):
+			word = word[:0]
+			active = false
+		default:
+			active = true
+			word = append(word, ch)
+		}
+	}
+	if !active {
 		return ""
 	}
-	fields := strings.Fields(beforeCursor)
-	if len(fields) == 0 {
-		return ""
-	}
-	return fields[len(fields)-1]
+	return string(word)
 }
 
 // commonPrefix returns the longest prefix shared by every candidate's text.
@@ -881,16 +932,17 @@ func commonPrefix(cands []Candidate) string {
 	if len(cands) == 0 {
 		return ""
 	}
-	prefix := cands[0].Text
+	prefix := []rune(cands[0].Text)
 	for _, c := range cands[1:] {
-		for !strings.HasPrefix(c.Text, prefix) {
+		text := []rune(c.Text)
+		for len(prefix) > len(text) || string(text[:len(prefix)]) != string(prefix) {
 			prefix = prefix[:len(prefix)-1]
-			if prefix == "" {
+			if len(prefix) == 0 {
 				return ""
 			}
 		}
 	}
-	return prefix
+	return string(prefix)
 }
 
 // printCandidates renders the completion listing below the current line:
@@ -971,24 +1023,16 @@ func (r *Readline) printCandidates(cands []Candidate) {
 // appends a space after a fully-applied completion (skipped for directories,
 // which invite further completion, and for common-prefix insertions).
 func (r *Readline) applyCompletion(line []rune, pos int, completion string, addSpace bool) ([]rune, int) {
-	lineStr := string(line[:pos])
-	parts := strings.Fields(lineStr)
-
-	// Find the start of the word being completed
-	var wordStart int
-	if len(parts) == 0 {
-		wordStart = 0
-	} else if len(lineStr) > 0 && lineStr[len(lineStr)-1] == ' ' {
-		wordStart = pos
-	} else {
-		// Find the last word
-		wordStart = strings.LastIndex(lineStr, " ")
-		if wordStart == -1 {
-			wordStart = 0
-		} else {
-			wordStart++
-		}
+	if pos < 0 {
+		pos = 0
+	} else if pos > len(line) {
+		pos = len(line)
 	}
+
+	// Find the start in rune coordinates, ignoring whitespace protected by an
+	// opening quote (including an unfinished quote inserted for a shared path
+	// prefix such as `'My D`).
+	wordStart := completionWordStart(line[:pos])
 
 	// A trailing "/" marks a directory (no trailing space, so further
 	// completion is invited). Decide this on the raw text, before quoting.
@@ -1001,6 +1045,8 @@ func (r *Readline) applyCompletion(line []rune, pos int, completion string, addS
 	// and must stay bare so the next keystrokes can extend them.
 	if addSpace {
 		completion = quoteCompletion(completion)
+	} else {
+		completion = quotePartialCompletion(completion)
 	}
 
 	// Build new line
@@ -1017,6 +1063,60 @@ func (r *Readline) applyCompletion(line []rune, pos int, completion string, addS
 	newLine += rest
 
 	return []rune(newLine), len([]rune(newLine)) - len([]rune(rest))
+}
+
+// completionWordStart returns the rune index of the active shell word.
+func completionWordStart(line []rune) int {
+	start := len(line)
+	var quote rune
+	active := false
+	for i, ch := range line {
+		if quote != 0 {
+			active = true
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch {
+		case ch == '\'' || ch == '"':
+			if !active {
+				start = i
+				active = true
+			}
+			quote = ch
+		case unicode.IsSpace(ch):
+			active = false
+			start = i + 1
+		default:
+			if !active {
+				start = i
+				active = true
+			}
+		}
+	}
+	if !active {
+		return len(line)
+	}
+	return start
+}
+
+// quotePartialCompletion opens (but deliberately does not close) a quote for
+// a shared completion prefix containing whitespace. Further typing and Tabs
+// therefore remain in the same shell word; a final single match replaces it
+// with a normally closed quote via quoteCompletion.
+func quotePartialCompletion(text string) string {
+	if !needsQuoting(text) {
+		return text
+	}
+	prefix := ""
+	if strings.HasPrefix(text, "~/") {
+		prefix, text = "~/", text[2:]
+	}
+	if strings.ContainsRune(text, '\'') {
+		return prefix + `"` + text
+	}
+	return prefix + "'" + text
 }
 
 // quoteCompletion wraps a completion candidate in quotes when it contains

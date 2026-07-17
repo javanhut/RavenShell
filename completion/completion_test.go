@@ -477,6 +477,45 @@ func TestFuzzyFallback(t *testing.T) {
 	}
 }
 
+func TestCaseInsensitivePrefixBeforeFuzzy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "Documents"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, "deep_other_copy"), "x")
+	e := newTestEngine(dir)
+
+	got := e.Complete("someprog doc", len([]rune("someprog doc")))
+	if len(got) != 1 || got[0].Text != "Documents/" {
+		t.Fatalf("Complete(someprog doc) = %v, want case-insensitive prefix Documents/ only", texts(got))
+	}
+}
+
+func TestCompleteUsesRuneCursorOffsets(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "résumé.txt"), "x")
+	e := newTestEngine(dir)
+
+	line := "print λ ré"
+	got := e.Complete(line, len([]rune(line)))
+	if len(got) != 1 || got[0].Text != "résumé.txt" {
+		t.Fatalf("Complete(%q) = %v, want résumé.txt", line, texts(got))
+	}
+}
+
+func TestCompleteQuotedFilenameWithSpaces(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "My Documents.txt"), "x")
+	mustWrite(t, filepath.Join(dir, "My Downloads.txt"), "x")
+	e := newTestEngine(dir)
+
+	line := "print 'My Do"
+	got := e.Complete(line, len([]rune(line)))
+	if !contains(got, "My Documents.txt") || !contains(got, "My Downloads.txt") {
+		t.Fatalf("Complete(%q) = %v, want both spaced filenames", line, texts(got))
+	}
+}
+
 // TestFuzzyScore checks the subsequence matcher and its ordering preferences.
 func TestFuzzyScore(t *testing.T) {
 	if _, ok := fuzzyScore("Downloads", "dwn"); !ok {

@@ -42,6 +42,7 @@ var precedences = map[token.TokenType]int{
 	token.PLUS:     SUM,
 	token.MINUS:    SUM,
 	token.ASTERISK: PRODUCT,
+	token.FSLASH:   PRODUCT,
 	token.PERCENT:  PRODUCT,
 	token.LBRACKET: INDEX,
 }
@@ -114,6 +115,11 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.RAVENHELP, p.parseHelpCommand)
 	p.registerPrefix(token.RAVENUPDATE, p.parseCommandKeyword)
 	p.registerPrefix(token.RAVENCOMPLETIONS, p.parseCommandKeyword)
+	p.registerPrefix(token.RAVENALIAS, p.parseCommandKeyword)
+	p.registerPrefix(token.RAVENUNALIAS, p.parseCommandKeyword)
+	p.registerPrefix(token.RAVENSOURCE, p.parseCommandKeyword)
+	p.registerPrefix(token.RAVENUNSET, p.parseCommandKeyword)
+	p.registerPrefix(token.RAVENTYPE, p.parseCommandKeyword)
 	p.registerPrefix(token.PS, p.parseCommandKeyword)
 	p.registerPrefix(token.KILL, p.parseCommandKeyword)
 	p.registerPrefix(token.KILLALL, p.parseCommandKeyword)
@@ -128,6 +134,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerInfix(token.PLUS, p.parseInfixExpression)
 	p.registerInfix(token.MINUS, p.parseInfixExpression)
 	p.registerInfix(token.ASTERISK, p.parseInfixExpression)
+	p.registerInfix(token.FSLASH, p.parseInfixExpression)
 	p.registerInfix(token.PERCENT, p.parseInfixExpression)
 	p.registerInfix(token.EQ, p.parseInfixExpression)
 	p.registerInfix(token.NOT_EQ, p.parseInfixExpression)
@@ -189,12 +196,16 @@ func (p *Parser) Errors() []string {
 func (p *Parser) peekError(t token.TokenType) {
 	msg := fmt.Sprintf("expected next token to be %s, got %s instead",
 		t, p.peekToken.Type)
-	p.errors = append(p.errors, msg)
+	p.errorAt(p.peekToken, msg)
 }
 
 func (p *Parser) noPrefixParseFnError(t token.TokenType) {
 	msg := fmt.Sprintf("no prefix parse function for %s found", t)
-	p.errors = append(p.errors, msg)
+	p.errorAt(p.curToken, msg)
+}
+
+func (p *Parser) errorAt(tok token.Token, message string) {
+	p.errors = append(p.errors, fmt.Sprintf("%d:%d: %s", tok.Line, tok.Column, message))
 }
 
 // ParseProgram is the main entry point
@@ -455,8 +466,8 @@ func (p *Parser) parseArgument() ast.Expression {
 	var word strings.Builder   // full text, used to classify a pure-literal word
 	sawExpansion := false
 	tokenCount := 0
-	braceDepth := 0    // open '{' groups glued into the current word
-	hasBrace := false  // word contains a literal brace group to expand
+	braceDepth := 0   // open '{' groups glued into the current word
+	hasBrace := false // word contains a literal brace group to expand
 
 	flushLit := func() {
 		if lit.Len() > 0 {
@@ -698,7 +709,7 @@ func (p *Parser) parseIntegerLiteral() ast.Expression {
 	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64)
 	if err != nil {
 		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
-		p.errors = append(p.errors, msg)
+		p.errorAt(p.curToken, msg)
 		return nil
 	}
 
@@ -809,7 +820,7 @@ func (p *Parser) parseVariableReference() ast.Expression {
 	vr := &ast.VariableReference{Token: dollar}
 
 	if !p.peekTokenIs(token.IDENT) {
-		p.errors = append(p.errors, "expected identifier after $")
+		p.errorAt(p.peekToken, "expected identifier after $")
 		return nil
 	}
 
@@ -941,7 +952,7 @@ func (p *Parser) parseRedirectionTarget() ast.Expression {
 		return p.parseVariableReference()
 
 	default:
-		p.errors = append(p.errors, fmt.Sprintf("unexpected token %s in redirection target", p.curToken.Type))
+		p.errorAt(p.curToken, fmt.Sprintf("unexpected token %s in redirection target", p.curToken.Type))
 		return nil
 	}
 }
@@ -984,6 +995,16 @@ func tokenTypeToCommandType(tt token.TokenType) ast.CommandType {
 		return ast.CMD_RAVENUPDATE
 	case token.RAVENCOMPLETIONS:
 		return ast.CMD_RAVENCOMPLETIONS
+	case token.RAVENALIAS:
+		return ast.CMD_RAVENALIAS
+	case token.RAVENUNALIAS:
+		return ast.CMD_RAVENUNALIAS
+	case token.RAVENSOURCE:
+		return ast.CMD_RAVENSOURCE
+	case token.RAVENUNSET:
+		return ast.CMD_RAVENUNSET
+	case token.RAVENTYPE:
+		return ast.CMD_RAVENTYPE
 	case token.PS:
 		return ast.CMD_PS
 	case token.KILL:
@@ -1178,7 +1199,7 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	// follow it get absorbed into the body — harmless in the REPL (which keeps
 	// reading until braces balance) but wrong for scripts and `-c`.
 	if !p.curTokenIs(token.RBRACE) {
-		p.errors = append(p.errors, "expected } to close block, got EOF")
+		p.errorAt(p.curToken, "expected } to close block, got EOF")
 	}
 
 	return block

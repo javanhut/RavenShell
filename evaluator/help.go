@@ -28,9 +28,9 @@ var helpEntries = []helpEntry{
 	{name: "cd", usage: "cd [dir]", summary: "Change the current directory (no argument goes home).", group: "Files & directories"},
 	{name: "cwd", aliases: []string{"whereami", "wai"}, usage: "whereami", summary: "Print the current working directory.", group: "Files & directories"},
 	{name: "show", aliases: []string{"read", "view"}, usage: "read <file>...", summary: "Print the contents of one or more files.", group: "Files & directories"},
-	{name: "mkfile", aliases: []string{"makefile", "newfile", "touch"}, usage: "mkfile <file>...", summary: "Create one or more empty files.", group: "Files & directories"},
-	{name: "mkdir", aliases: []string{"makedir"}, usage: "mkdir <dir>...", summary: "Create directories, including any missing parents.", group: "Files & directories"},
-	{name: "rm", aliases: []string{"remove", "delete"}, usage: "remove <path>...", summary: "Remove files or directories (recursively).", group: "Files & directories"},
+	{name: "mkfile", aliases: []string{"makefile", "newfile", "touch"}, usage: "mkfile <file>...", summary: "Create files without truncating existing content.", group: "Files & directories"},
+	{name: "mkdir", aliases: []string{"makedir"}, usage: "mkdir [-p|--parents] <dir>...", summary: "Create directories; makedir creates missing parents automatically.", group: "Files & directories"},
+	{name: "rm", aliases: []string{"remove", "delete"}, usage: "rm [-r|--recursive] [-f|--force] <path>...", summary: "Remove files; recursive removal must be requested explicitly.", group: "Files & directories"},
 	{name: "rmdir", usage: "rmdir [-f|--force] <dir>...", summary: "Remove directories; only empty ones unless --force is given.", group: "Files & directories"},
 
 	{name: "print", aliases: []string{"output"}, usage: "print [text...]", summary: "Print text, or echo piped input, to standard output.", group: "Output"},
@@ -40,6 +40,12 @@ var helpEntries = []helpEntry{
 	{name: "export", usage: "export NAME [value...]", summary: "Set a shell environment variable.", group: "Environment"},
 	{name: "env", usage: "env", summary: "Print the effective environment, sorted by name.", group: "Environment"},
 	{name: "raven-add", usage: "raven-add path [dir]", summary: "Register an extra executable search directory, or list them.", group: "Environment"},
+
+	{name: "raven-alias", usage: "raven-alias [name command [arguments...]]", summary: "Define or list scriptable interactive aliases.", group: "Configuration"},
+	{name: "raven-unalias", usage: "raven-unalias <name>...", summary: "Remove interactive aliases.", group: "Configuration"},
+	{name: "raven-source", usage: "raven-source <file>", summary: "Evaluate a RavenScript file in the current session.", group: "Configuration"},
+	{name: "raven-unset", usage: "raven-unset <name>...", summary: "Remove variables or environment overrides.", group: "Configuration"},
+	{name: "raven-type", usage: "raven-type <name>...", summary: "Explain how command names resolve.", group: "Configuration"},
 
 	{name: "ps", usage: "ps [pattern]", summary: "List running processes, optionally filtered by name.", group: "Processes"},
 	{name: "kill", usage: "kill <pid|%job> [signal]", summary: "Send a signal (default TERM) to a process or background job.", group: "Processes"},
@@ -57,6 +63,7 @@ var groupOrder = []string{
 	"Files & directories",
 	"Output",
 	"Environment",
+	"Configuration",
 	"Processes",
 	"Maintenance",
 	"Help",

@@ -81,10 +81,11 @@ func (e *Evaluator) startBackground(name string, args []string) (string, error) 
 	}
 
 	c := exec.Command(path, args...)
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.Dir = e.cwd
 	c.Env = e.buildEnv()
 	c.Stdout = e.stdout
-	c.Stderr = os.Stderr
+	c.Stderr = e.stderr
 	// Background jobs do not read from the terminal.
 	c.Stdin = nil
 
@@ -93,10 +94,11 @@ func (e *Evaluator) startBackground(name string, args []string) (string, error) 
 			// Executable scripts with no shebang line: POSIX shells fall back
 			// to interpreting the file with /bin/sh.
 			c = exec.Command("/bin/sh", append([]string{path}, args...)...)
+			c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			c.Dir = e.cwd
 			c.Env = e.buildEnv()
 			c.Stdout = e.stdout
-			c.Stderr = os.Stderr
+			c.Stderr = e.stderr
 			c.Stdin = nil
 			err = c.Start()
 		}
@@ -214,12 +216,14 @@ func (e *Evaluator) execKill(args []string) (string, error) {
 	}
 
 	var pid int
+	isJob := false
 	if strings.HasPrefix(positional[0], "%") {
 		p, ok := e.jobByRef(positional[0])
 		if !ok {
 			return "", fmt.Errorf("kill: no such job %s", positional[0])
 		}
 		pid = p
+		isJob = true
 	} else {
 		p, err := strconv.Atoi(positional[0])
 		if err != nil {
@@ -228,8 +232,16 @@ func (e *Evaluator) execKill(args []string) (string, error) {
 		pid = p
 	}
 
-	if err := signalPid(pid, sig); err != nil {
-		return "", fmt.Errorf("kill: %v", err)
+	var signalErr error
+	if isJob {
+		// Background jobs lead their own process group, so a job reference
+		// targets the whole group rather than leaving descendants behind.
+		signalErr = syscall.Kill(-pid, sig)
+	} else {
+		signalErr = signalPid(pid, sig)
+	}
+	if signalErr != nil {
+		return "", fmt.Errorf("kill: %v", signalErr)
 	}
 	fmt.Fprintf(e.stdout, "signal %d sent to process %d\n", int(sig), pid)
 	return "", nil

@@ -83,7 +83,7 @@ automatically disabled when output is piped or redirected.
 Run a `.rsh` script file:
 
 ```bash
-ravenshell myscript.rsh
+ravenshell myscript.rsh input.txt --verbose
 ```
 
 Run a one-off command, or feed a program in via stdin:
@@ -106,6 +106,15 @@ cwd
 ```
 
 Comments start with `#` and continue to the end of the line.
+
+Arguments after the filename are exposed as the regular RavenScript `args`
+array. The filename itself is not included:
+
+```rsh
+for arg in args {
+    print arg
+}
+```
 
 ## Shell Features
 
@@ -369,7 +378,7 @@ mkfile a.txt b.txt c.txt    # Create multiple files
 
 ```rsh
 rm file.txt                 # Remove file
-rm old_folder               # Remove directory and contents
+rm --recursive old_folder   # Remove directory and contents explicitly
 rmdir empty_folder          # Remove empty directory only
 ```
 

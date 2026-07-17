@@ -8,6 +8,7 @@ import (
 	"ravenshell/parser"
 	"strings"
 	"testing"
+	"time"
 )
 
 // evalScript runs src end-to-end (lexer -> parser -> evaluator) against a fresh
@@ -29,6 +30,109 @@ func evalScript(t *testing.T, dir, src string) (string, error) {
 	}
 	err := e.Eval(program)
 	return buf.String(), err
+}
+
+func TestModernScriptArguments(t *testing.T) {
+	e := NewWithArgs([]string{"alpha", "two words", "3"})
+	var buf bytes.Buffer
+	e.stdout = &buf
+	l := lexer.NewLexer("count = len(args)\nprint count\nprint args")
+	p := parser.New(l)
+	program := p.ParseProgram()
+	if errs := p.Errors(); len(errs) > 0 {
+		t.Fatalf("parser errors: %v", errs)
+	}
+	if err := e.Eval(program); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); got != "3\nalpha two words 3\n" {
+		t.Fatalf("script args output = %q", got)
+	}
+}
+
+func TestModernLiteralsAndDivision(t *testing.T) {
+	dir := t.TempDir()
+	out, err := evalScript(t, dir, "enabled = true\nprint enabled\nvalue = 7 / 2\nprint value")
+	if err != nil || out != "true\n3\n" {
+		t.Fatalf("modern expression output = %q, err=%v", out, err)
+	}
+}
+
+func TestTripleQuotedMultilineString(t *testing.T) {
+	dir := t.TempDir()
+	src := "message = \"\"\"first line\nsecond line\"\"\"\nprint message"
+	out, err := evalScript(t, dir, src)
+	if err != nil || out != "first line\nsecond line\n" {
+		t.Fatalf("multiline string output = %q, err=%v", out, err)
+	}
+}
+
+func TestRuntimeErrorsCarrySourceLocation(t *testing.T) {
+	_, err := evalScript(t, t.TempDir(), "print before\nvalue = [1][9]")
+	if err == nil || !strings.HasPrefix(err.Error(), "2:1:") {
+		t.Fatalf("runtime error = %v, want line 2 column 1", err)
+	}
+}
+
+func TestRavenAliasAndUnalias(t *testing.T) {
+	dir := t.TempDir()
+	out, err := evalScript(t, dir, "raven-alias greet print hello\ngreet world")
+	if err != nil || out != "hello world\n" {
+		t.Fatalf("alias output = %q, err=%v", out, err)
+	}
+	_, err = evalScript(t, dir, "raven-unalias missing")
+	if err == nil {
+		t.Fatal("removing an unknown alias should fail")
+	}
+}
+
+func TestRavenSourceSharesLanguageState(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "settings.rsh", "project = \"raven\"\nraven-alias hi print hello")
+	out, err := evalScript(t, dir, "raven-source settings.rsh\nprint project\nhi")
+	if err != nil || out != "raven\nhello\n" {
+		t.Fatalf("source output = %q, err=%v", out, err)
+	}
+}
+
+func TestStreamingPipelineStopsInfiniteProducer(t *testing.T) {
+	dir := t.TempDir()
+	done := make(chan struct{})
+	var out string
+	var err error
+	go func() {
+		out, err = evalScript(t, dir, "yes | head -n 1")
+		close(done)
+	}()
+	select {
+	case <-done:
+		if err != nil || strings.TrimSpace(out) != "y" {
+			t.Fatalf("streaming pipeline output = %q, err=%v", out, err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("pipeline did not stream; producer appears to be buffered")
+	}
+}
+
+func TestSafeFileCommandSemantics(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "keep.txt", "important")
+	if _, err := evalScript(t, dir, "touch keep.txt"); err != nil {
+		t.Fatal(err)
+	}
+	content, _ := os.ReadFile(filepath.Join(dir, "keep.txt"))
+	if string(content) != "important" {
+		t.Fatalf("touch truncated existing content: %q", content)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "folder"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := evalScript(t, dir, "rm folder"); err == nil {
+		t.Fatal("rm should refuse a directory without --recursive")
+	}
+	if _, err := evalScript(t, dir, "rm --recursive folder"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // writeFile is a test helper that creates a file (and parents) with content.

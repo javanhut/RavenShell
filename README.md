@@ -25,7 +25,9 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 - **Human-Readable Aliases** - Natural-language names for common actions: `whereami`/`wai` (cwd), `read`/`view` (show a file), `remove`/`delete` (rm), `makefile`/`newfile`/`touch` (mkfile), `makedir` (mkdir)
 - **Built-in Help** - `raven-help` lists every built-in; `raven-help <command>` shows usage and aliases
 - **External Commands** - Run any program on your `PATH` (git, python, cat, ...) with flag support (`-l`, `--all`)
-- **Pipes & Redirection** - Chain commands with `|` and redirect with `>`, `>>`, `<`
+- **Streaming Pipes & Redirection** - Run pipeline stages concurrently with bounded memory and redirect with `>`, `>>`, `<`
+- **Modern Script Arguments** - Script arguments are exposed as the `args` array, without numbered shell variables
+- **Scriptable Interactive Configuration** - Define aliases and load session files with `raven-alias`, `raven-unalias`, and `raven-source`
 - **Configuration** - Customize startup behavior with `.ravenrc`
 
 ## Quick Start
@@ -67,7 +69,7 @@ ravenshell
 
 **Run a script:**
 ```bash
-ravenshell script.rsh
+ravenshell script.rsh input.txt --verbose
 ```
 
 **Run a one-off command:**
@@ -112,6 +114,12 @@ raven-help               # list all built-ins; `raven-help read` for details
 # Variables and printing
 name = "RavenShell"
 print name
+
+# Script arguments are regular language data
+print args
+if len(args) > 0 {
+    print "first argument: " + args[0]
+}
 
 # Arrays and loops
 numbers = [1, 2, 3, 4, 5]
@@ -189,6 +197,11 @@ print "hello" | wc -w
 # Register an extra directory to search for executables (persisted)
 raven-add path ~/scripts
 raven-add path            # list registered search paths
+
+# Interactive configuration (put these in ~/.ravenrc to load at startup)
+raven-alias ll ls -la
+raven-type ll
+raven-source project-settings.rsh
 ```
 
 > Note: language-level text output uses the built-in `print`. Bare words that

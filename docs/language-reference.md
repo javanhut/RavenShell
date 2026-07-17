@@ -40,6 +40,18 @@ name = "Hello, World!"
 path = 'single quotes work too'
 ```
 
+Triple-quoted strings can span lines, which is the preferred RavenScript
+alternative to shell heredocs:
+
+```rsh
+message = """Build started
+Processing files...
+Build complete"""
+print message
+```
+
+Common escapes such as `\n`, `\t`, `\\`, `\"`, and `\'` are supported.
+
 **Interpolation:** double-quoted strings expand `$VAR` and `${VAR}` references
 (and `$?`); single-quoted strings are literal:
 
@@ -65,7 +77,8 @@ mixed = ["text", 42, "more"]
 
 ### Booleans
 
-Boolean values result from comparison operations. They are not directly assignable but are used in conditions:
+Boolean values result from comparison operations. The literals `true` and
+`false` can also be assigned and passed to functions:
 
 ```rsh
 if x > 5 {      # Comparison produces boolean
@@ -81,6 +94,22 @@ if x > 5 {      # Comparison produces boolean
 
 ## Variables
 
+### Script arguments
+
+Arguments passed after a script filename are available as the global `args`
+array. The filename is not inserted into the array and there are no numbered
+shell variables:
+
+```rsh
+# ravenshell build.rsh debug app
+print len(args)     # 2
+print args[0]       # debug
+print args[1]       # app
+```
+
+Because `args` is ordinary language data, it can be indexed, iterated, passed
+to functions, or supplied to an external command.
+
 ### Assignment
 
 Use `=` to assign values to variables:
@@ -93,6 +122,21 @@ empty = []string
 ```
 
 Variable names must start with a letter and can contain letters, numbers, and underscores.
+
+### Program exit
+
+`exit()` ends a script or interactive session successfully. Pass an integer
+from 0 through 255 to choose another process status:
+
+```rsh
+if len(args) == 0 {
+    print "an input is required"
+    exit(2)
+}
+```
+
+`lastStatus()` returns the most recent command's process status as an integer.
+It is the language-oriented equivalent of the interactive `$?` shorthand.
 
 ### Using Variables
 

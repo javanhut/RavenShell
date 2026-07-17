@@ -3,6 +3,7 @@ package parser
 import (
 	"ravenshell/ast"
 	"ravenshell/lexer"
+	"strings"
 	"testing"
 )
 
@@ -538,6 +539,14 @@ func TestUnclosedBlockReportsError(t *testing.T) {
 		if len(p.Errors()) == 0 {
 			t.Errorf("input %q: expected a parse error for the unclosed block, got none", in)
 		}
+	}
+}
+
+func TestParserErrorsCarrySourceLocation(t *testing.T) {
+	p := New(lexer.NewLexer("print ok\nif true {"))
+	p.ParseProgram()
+	if len(p.Errors()) == 0 || !strings.HasPrefix(p.Errors()[0], "2:") {
+		t.Fatalf("parser errors = %v, want a line 2 location", p.Errors())
 	}
 }
 

@@ -74,6 +74,10 @@ type TokenType string
 type Token struct {
     Type    TokenType
     Literal string
+	Offset  int // zero-based source byte offset
+	End     int // exclusive source byte offset
+	Line    int // one-based diagnostic line
+	Column  int // one-based diagnostic column
     // PrecededByNewline marks the first token on a line; the parser uses it to
     // end a command's argument list at a line break.
     PrecededByNewline bool

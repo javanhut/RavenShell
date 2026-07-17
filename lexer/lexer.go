@@ -2,16 +2,26 @@ package lexer
 
 import (
 	"ravenshell/token"
+	"sort"
+	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 type Lexer struct {
-	input string
-	pos   int
+	input      string
+	pos        int
+	lineStarts []int
 }
 
 func NewLexer(input string) *Lexer {
-	return &Lexer{input: input, pos: 0}
+	starts := []int{0}
+	for i := 0; i < len(input); i++ {
+		if input[i] == '\n' {
+			starts = append(starts, i+1)
+		}
+	}
+	return &Lexer{input: input, pos: 0, lineStarts: starts}
 }
 
 // GetPos returns the current lexer position (for lookahead)
@@ -75,9 +85,20 @@ func (l *Lexer) peekNext() byte {
 	return l.input[l.pos+1]
 }
 
+func (l *Lexer) hasTripleQuote(quote byte) bool {
+	return l.pos+2 < len(l.input) && l.input[l.pos] == quote &&
+		l.input[l.pos+1] == quote && l.input[l.pos+2] == quote
+}
+
 func (l *Lexer) NextToken() token.Token {
 	sawWhitespace, sawNewline := l.skipWhitespaceAndComments()
+	start := l.pos
 	tok := l.scanToken()
+	tok.Offset = start
+	tok.End = l.pos
+	lineIndex := sort.Search(len(l.lineStarts), func(i int) bool { return l.lineStarts[i] > start }) - 1
+	tok.Line = lineIndex + 1
+	tok.Column = utf8.RuneCountInString(l.input[l.lineStarts[lineIndex]:start]) + 1
 	tok.PrecededByNewline = sawNewline
 	tok.PrecededByWhitespace = sawWhitespace
 	return tok
@@ -271,50 +292,8 @@ func (l *Lexer) scanToken() token.Token {
 			// Use LT for single < (parser will disambiguate comparison vs redirection)
 			return token.Token{Type: token.LT, Literal: string(l.advance())}
 		}
-	case '"':
-		// 1. Skip the opening quote
-		l.advance()
-		start := l.pos
-
-		// 2. Read until we find the closing quote or EOF
-		for l.peek() != '"' && l.peek() != 0 {
-			l.advance()
-		}
-
-		// Capture the string content
-		literal := l.input[start:l.pos]
-
-		// 3. Skip the closing quote (if it exists)
-		if l.peek() == '"' {
-			l.advance()
-		} else {
-			// Optional: Handle unclosed string error here
-			return token.Token{Type: token.ILLEGAL, Literal: literal}
-		}
-		return token.Token{Type: token.STRING, Literal: literal}
-	case '\'':
-
-		// 1. Skip the opening quote
-		l.advance()
-		start := l.pos
-
-		// 2. Read until we find the closing quote or EOF
-		for l.peek() != '\'' && l.peek() != 0 {
-			l.advance()
-		}
-
-		// Capture the string content
-		literal := l.input[start:l.pos]
-
-		// 3. Skip the closing quote (if it exists)
-		if l.peek() == '\'' {
-			l.advance()
-		} else {
-			// Optional: Handle unclosed string error here
-			return token.Token{Type: token.ILLEGAL, Literal: literal}
-		}
-		// Single-quoted strings are literal (not interpolated).
-		return token.Token{Type: token.STRING, Literal: literal, SingleQuoted: true}
+	case '"', '\'':
+		return l.scanString(ch)
 	case 0:
 		return token.Token{Type: token.EOF, Literal: ""}
 	}
@@ -356,6 +335,71 @@ func (l *Lexer) scanToken() token.Token {
 		return token.Token{Type: token.IDENT, Literal: literal}
 	}
 	return token.Token{Type: token.ILLEGAL, Literal: string(l.advance())}
+}
+
+// scanString handles regular and Python-style triple-quoted strings. Double
+// quotes interpolate at evaluation time; single quotes remain literal. Common
+// backslash escapes are decoded by the language rather than passed through as
+// shell syntax.
+func (l *Lexer) scanString(quote byte) token.Token {
+	triple := l.hasTripleQuote(quote)
+	width := 1
+	if triple {
+		width = 3
+	}
+	for range width {
+		l.advance()
+	}
+	start := l.pos
+	for l.peek() != 0 {
+		if triple {
+			if l.hasTripleQuote(quote) {
+				literal := decodeStringEscapes(l.input[start:l.pos], quote)
+				l.advance()
+				l.advance()
+				l.advance()
+				return token.Token{Type: token.STRING, Literal: literal, SingleQuoted: quote == '\''}
+			}
+		} else if l.peek() == quote {
+			literal := decodeStringEscapes(l.input[start:l.pos], quote)
+			l.advance()
+			return token.Token{Type: token.STRING, Literal: literal, SingleQuoted: quote == '\''}
+		}
+		if l.peek() == '\\' && l.peekNext() != 0 {
+			l.advance()
+			l.advance()
+			continue
+		}
+		l.advance()
+	}
+	return token.Token{Type: token.ILLEGAL, Literal: l.input[start:l.pos]}
+}
+
+func decodeStringEscapes(s string, quote byte) string {
+	var out strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			out.WriteByte(s[i])
+			continue
+		}
+		i++
+		switch s[i] {
+		case 'n':
+			out.WriteByte('\n')
+		case 'r':
+			out.WriteByte('\r')
+		case 't':
+			out.WriteByte('\t')
+		case '\\':
+			out.WriteByte('\\')
+		case quote:
+			out.WriteByte(quote)
+		default:
+			out.WriteByte('\\')
+			out.WriteByte(s[i])
+		}
+	}
+	return out.String()
 }
 
 // scanRedirFrom builds a single fd-aware redirection token starting at byte

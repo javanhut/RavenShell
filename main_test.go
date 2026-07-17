@@ -1,6 +1,22 @@
 package main
 
-import "testing"
+import (
+	"ravenshell/evaluator"
+	"testing"
+)
+
+func TestRunSourceReturnsStatusAndExitRequest(t *testing.T) {
+	e := evaluator.New()
+	if got := runSource(e, "definitely_missing_raven_command", ""); got.status != 127 {
+		t.Fatalf("missing command status = %d, want 127", got.status)
+	}
+	if got := runSource(evaluator.New(), "exit(7)", ""); got.status != 7 || !got.exitRequested {
+		t.Fatalf("exit result = %+v, want status 7 and exit request", got)
+	}
+	if got := runSource(evaluator.New(), "x = [1][4]", ""); got.status != 1 {
+		t.Fatalf("runtime error status = %d, want 1", got.status)
+	}
+}
 
 func TestInputIncomplete(t *testing.T) {
 	cases := []struct {
@@ -11,6 +27,7 @@ func TestInputIncomplete(t *testing.T) {
 		// Complete inputs.
 		{"echo hi", false, "plain command"},
 		{`echo "hello world"`, false, "balanced double quote"},
+		{"print \"\"\"hello\nworld\"\"\"", false, "balanced triple quote"},
 		{"echo 'literal'", false, "balanced single quote"},
 		{"for x in [1, 2] { echo x }", false, "balanced brackets/braces"},
 		{"echo foo &", false, "trailing single & is background (complete)"},
@@ -20,6 +37,7 @@ func TestInputIncomplete(t *testing.T) {
 
 		// Incomplete: unbalanced brackets / strings.
 		{`echo "unterminated`, true, "open double quote"},
+		{"print \"\"\"unterminated", true, "open triple quote"},
 		{"echo 'unterminated", true, "open single quote"},
 		{"for x in [1, 2] {", true, "open brace"},
 		{"echo (1 + 2", true, "open paren"},

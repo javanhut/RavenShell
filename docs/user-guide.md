@@ -172,6 +172,12 @@ lists all options, with descriptions shown dimmed. File candidates in the
 listing are color-coded by type, using the same scheme as `ls`: directories
 **bold blue**, symlinks **cyan**, executables **green**.
 
+Matching prefers an exact prefix, then a case-insensitive prefix, and finally
+falls back to a fuzzy subsequence when no prefix matches (`dwn` finds
+`Downloads/`). Filenames containing spaces are quoted automatically; shared
+prefixes remain inside an open quote so repeated `Tab` presses can keep
+narrowing the same path.
+
 #### Custom completions
 
 You can teach RavenShell to complete your own tools by dropping a JSON spec in
@@ -288,7 +294,7 @@ keeps running.
 | `Ctrl+K` | Clear line after cursor |
 | `Ctrl+W` | Delete word before cursor |
 | `Ctrl+L` | Clear screen |
-| `Ctrl+R` | Reverse incremental history search |
+| `Ctrl+R` | Reverse incremental history search (case-insensitive, with fuzzy abbreviation fallback) |
 | `Ctrl+C` | Cancel current input, or interrupt a running command/loop |
 | `Ctrl+D` | Exit (on empty line) / Delete character |
 | `Left Arrow` | Move cursor left |

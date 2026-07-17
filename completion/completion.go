@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // Candidate is a single completion choice. Text replaces the word being
@@ -149,16 +150,23 @@ func New(cwd func() string, commands func() []string, summaries map[string]strin
 
 // Complete returns the candidates for the word at pos in line.
 func (e *Engine) Complete(line string, pos int) []Candidate {
-	if pos > len(line) {
-		pos = len(line)
+	// Readline tracks the cursor in runes, not bytes. Converting here keeps a
+	// non-ASCII character before the cursor from splitting a UTF-8 sequence (or
+	// making the byte slice point at the wrong word).
+	runes := []rune(line)
+	if pos < 0 {
+		pos = 0
+	} else if pos > len(runes) {
+		pos = len(runes)
 	}
-	before := line[:pos]
-	words := strings.Fields(before)
+	before := string(runes[:pos])
+	words, active := completionWords(before)
 
-	// The word being completed: the trailing token, unless the line ends in a
-	// space (then a new, empty word is being started).
+	// The word being completed is the active (possibly quoted) trailing token.
+	// completionWords removes shell quotes, so candidates remain raw paths and
+	// can be matched normally across spaces.
 	cur := ""
-	if len(words) > 0 && !strings.HasSuffix(before, " ") {
+	if active && len(words) > 0 {
 		cur = words[len(words)-1]
 		words = words[:len(words)-1]
 	}
@@ -273,6 +281,49 @@ func (e *Engine) Complete(line string, pos int) []Candidate {
 		out = append(out, e.completePath(cur, dirsOnly)...)
 	}
 	return finish(out, cur)
+}
+
+// completionWords splits an input prefix on whitespace outside single or
+// double quotes. Quotes are omitted from the returned logical words. active is
+// true when the cursor is currently inside a token, including an unfinished
+// quoted token such as `'My Doc`.
+func completionWords(input string) (words []string, active bool) {
+	var word []rune
+	var quote rune
+	started := false
+	flush := func() {
+		if started {
+			words = append(words, string(word))
+			word = word[:0]
+			started = false
+		}
+	}
+
+	for _, ch := range input {
+		if quote != 0 {
+			started = true
+			if ch == quote {
+				quote = 0
+			} else {
+				word = append(word, ch)
+			}
+			continue
+		}
+		switch {
+		case ch == '\'' || ch == '"':
+			started = true
+			quote = ch
+		case unicode.IsSpace(ch):
+			flush()
+		default:
+			started = true
+			word = append(word, ch)
+		}
+	}
+	if started {
+		words = append(words, string(word))
+	}
+	return words, started
 }
 
 // completeCommandNames returns command names matching prefix, with the
@@ -414,17 +465,26 @@ func (e *Engine) completePath(prefix string, dirsOnly bool) []Candidate {
 // first occurrence, so spec candidates win over file-fallback duplicates), and
 // sorts the result.
 //
-// Matching is prefix-first: an exact (case-sensitive) prefix match is always
-// preferred and preserves the precise behavior of tab-completion. Only when the
-// prefix matches nothing does a light fuzzy fallback kick in, accepting any
-// candidate whose text contains the typed characters as a case-insensitive
-// subsequence (so "dwn" still finds "Downloads"). Fuzzy results are ordered by
-// match quality.
+// Matching is tiered: an exact (case-sensitive) prefix wins, followed by a
+// case-insensitive prefix, then a light fuzzy fallback. The fuzzy tier accepts
+// candidates whose text contains the typed characters as a case-insensitive
+// subsequence (so "dwn" still finds "Downloads").
 func finish(cands []Candidate, prefix string) []Candidate {
 	matched := make([]Candidate, 0, len(cands))
 	for _, c := range cands {
 		if strings.HasPrefix(c.Text, prefix) {
 			matched = append(matched, c)
+		}
+	}
+
+	// Preserve precise case-sensitive completion whenever it yields anything,
+	// but do not force users to reproduce filesystem or command-name casing.
+	if len(matched) == 0 && prefix != "" {
+		folded := strings.ToLower(prefix)
+		for _, c := range cands {
+			if strings.HasPrefix(strings.ToLower(c.Text), folded) {
+				matched = append(matched, c)
+			}
 		}
 	}
 

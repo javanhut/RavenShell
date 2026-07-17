@@ -125,6 +125,23 @@ func TestCommonPrefix(t *testing.T) {
 	if got := commonPrefix([]Candidate{{Text: "abc"}, {Text: "xyz"}}); got != "" {
 		t.Errorf("commonPrefix(disjoint) = %q, want \"\"", got)
 	}
+	if got := commonPrefix([]Candidate{{Text: "résumé"}, {Text: "réseau"}}); got != "rés" {
+		t.Errorf("commonPrefix(unicode) = %q, want \"rés\"", got)
+	}
+}
+
+func TestHistoryMatch(t *testing.T) {
+	history := []string{"go test ./...", "git status", "Git Commit -m fix"}
+
+	if i, got := historyMatch(history, "GIT", len(history)); i != 2 || got != "Git Commit -m fix" {
+		t.Errorf("case-insensitive match = (%d, %q), want newest git command", i, got)
+	}
+	if i, got := historyMatch(history, "gst", len(history)); i != 1 || got != "git status" {
+		t.Errorf("fuzzy match = (%d, %q), want git status", i, got)
+	}
+	if i, got := historyMatch(history, "zzz", len(history)); i != -1 || got != "" {
+		t.Errorf("missing match = (%d, %q), want (-1, empty)", i, got)
+	}
 }
 
 func TestCurrentWord(t *testing.T) {
@@ -136,6 +153,9 @@ func TestCurrentWord(t *testing.T) {
 	}
 	if got := currentWord(""); got != "" {
 		t.Errorf("currentWord empty = %q, want \"\"", got)
+	}
+	if got := currentWord("print 'My Doc"); got != "My Doc" {
+		t.Errorf("currentWord quoted = %q, want \"My Doc\"", got)
 	}
 }
 
@@ -161,6 +181,19 @@ func TestApplyCompletionSpace(t *testing.T) {
 	}
 }
 
+func TestApplyCompletionUsesRuneCursorOffsets(t *testing.T) {
+	r := newTestReadline()
+	line := []rune("print λ ré tail")
+	pos := len([]rune("print λ ré"))
+	got, gotPos := r.applyCompletion(line, pos, "résumé.txt", true)
+	if string(got) != "print λ 'résumé.txt'  tail" {
+		t.Fatalf("applyCompletion unicode = %q", string(got))
+	}
+	if gotPos != len([]rune("print λ 'résumé.txt' ")) {
+		t.Errorf("cursor = %d, want %d", gotPos, len([]rune("print λ 'résumé.txt' ")))
+	}
+}
+
 // TestApplyCompletionQuoting covers wrapping candidates with spaces / special
 // characters so the inserted word round-trips through the lexer.
 func TestApplyCompletionQuoting(t *testing.T) {
@@ -179,8 +212,8 @@ func TestApplyCompletionQuoting(t *testing.T) {
 		{"space dir", "cd My", "My Documents/", true, "cd 'My Documents/'"},
 		// No special chars: inserted bare, with the usual trailing space.
 		{"plain file", "cat re", "readme.md", true, "cat readme.md "},
-		// Common-prefix (addSpace=false) must stay bare even with a space.
-		{"prefix stays bare", "cd My", "My Doc", false, "cd My Doc"},
+		// A shared prefix opens a quote so another Tab still sees one word.
+		{"partial spaced prefix", "cd My", "My Doc", false, "cd 'My Doc"},
 		// A leading ~/ stays outside the quotes so it still expands.
 		{"home path", "cd ~/My", "~/My Docs/", true, "cd ~/'My Docs/'"},
 	}
@@ -189,6 +222,21 @@ func TestApplyCompletionQuoting(t *testing.T) {
 		if string(line) != c.want {
 			t.Errorf("%s: applyCompletion = %q, want %q", c.name, string(line), c.want)
 		}
+	}
+}
+
+func TestRepeatedCompletionForFilenamesWithSpaces(t *testing.T) {
+	r := newTestReadline()
+	line, pos := r.applyCompletion([]rune("print My"), len([]rune("print My")), "My Do", false)
+	if string(line) != "print 'My Do" {
+		t.Fatalf("shared prefix = %q", string(line))
+	}
+	if got := currentWord(string(line[:pos])); got != "My Do" {
+		t.Fatalf("current word after shared prefix = %q, want My Do", got)
+	}
+	line, _ = r.applyCompletion(line, pos, "My Documents.txt", true)
+	if string(line) != "print 'My Documents.txt' " {
+		t.Fatalf("final spaced completion = %q", string(line))
 	}
 }
 

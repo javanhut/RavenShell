@@ -12,9 +12,9 @@ command.
 |-----------|---------|--------|
 | `cwd`     | `whereami`, `wai` | Print the current directory |
 | `show`    | `read`, `view` | Print a file's contents |
-| `mkfile`  | `makefile`, `newfile`, `touch` | Create empty files |
-| `mkdir`   | `makedir` | Create directories |
-| `rm`      | `remove`, `delete` | Remove files or directories |
+| `mkfile`  | `makefile`, `newfile`, `touch` | Create files without truncating them |
+| `mkdir`   | `makedir` | Create directories (`makedir` also creates parents) |
+| `rm`      | `remove`, `delete` | Remove files; recursion is explicit |
 
 Run `raven-help` to list every built-in, or `raven-help <command>` for details.
 
@@ -92,25 +92,27 @@ whereami            # same thing, reads more naturally
 
 ### mkdir - Make Directory
 
-Creates one or more directories (including any missing parent directories).
+Creates one or more directories. Use `-p` to create missing parents, or use
+the Raven convenience spelling `makedir`.
 
 **Aliases:** `makedir`
 
 **Syntax:**
 ```
-mkdir path [path...]
+mkdir [-p|--parents] path [path...]
 ```
 
 **Arguments:**
 - `path`: One or more directory paths to create.
 
-**Notes:** Creates parent directories if they don't exist.
+**Flags:** `-p`, `--parents` creates missing parent directories.
 
 **Examples:**
 ```rsh
 mkdir new_folder
 mkdir dir1 dir2 dir3
-mkdir ~/projects/new_project
+mkdir -p ~/projects/new_project
+makedir ~/projects/another_project
 ```
 
 ---
@@ -146,32 +148,34 @@ rmdir build -f                # short flag form
 
 ### rm - Remove
 
-Removes files or directories (including contents).
+Removes files. Removing a directory requires `-r` / `--recursive`.
 
 **Aliases:** `remove`, `delete`
 
 **Syntax:**
 ```
-rm path [path...]
+rm [-r|--recursive] [-f|--force] path [path...]
 ```
 
 **Arguments:**
 - `path`: One or more file or directory paths to remove.
 
-**Warning:** Removes directories recursively with all contents.
+**Safety:** Directory recursion is never inferred. `-f` suppresses missing-file
+errors but does not imply recursion.
 
 **Examples:**
 ```rsh
 rm file.txt
 rm file1.txt file2.txt
-rm old_folder
+rm --recursive old_folder
 ```
 
 ---
 
 ### mkfile - Make File
 
-Creates empty files.
+Creates files and updates their modification time. Existing content is never
+truncated.
 
 **Aliases:** `makefile`, `newfile`, `touch`
 
@@ -213,6 +217,27 @@ read config.txt           # alias, reads naturally
 view ~/notes.txt          # alias
 show file1.txt file2.txt
 ```
+
+---
+
+## Interactive Configuration
+
+Interactive settings use explicit `raven-*` commands and are themselves valid
+RavenScript. Put definitions in `~/.ravenrc` to load them at startup.
+
+```rsh
+raven-alias ll ls -la
+raven-alias greet print "hello there"
+raven-type ll
+raven-unalias greet
+raven-source project-settings.rsh
+raven-unset TEMP_VALUE
+```
+
+`raven-source` evaluates a file in the current session, so its variables,
+functions, aliases, and environment changes remain available.
+Aliases expand to one command plus fixed arguments; use a RavenScript function
+when an interactive shortcut needs control flow or multiple commands.
 
 ---
 

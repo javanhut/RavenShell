@@ -65,6 +65,7 @@ func main() {
 
 	args := os.Args[1:]
 	script := ""
+	var scriptArgs []string
 
 	for i := range args {
 		arg := args[i]
@@ -88,6 +89,7 @@ func main() {
 			continue
 		default:
 			script = arg
+			scriptArgs = append([]string(nil), args[i+1:]...)
 		}
 		if script != "" {
 			break
@@ -95,7 +97,7 @@ func main() {
 	}
 
 	if script != "" {
-		runScript(script)
+		runScript(script, scriptArgs)
 		return
 	}
 
@@ -111,12 +113,12 @@ func main() {
 	}
 }
 
-// runCommandString evaluates a single command string (the -c flag) and exits
-// non-zero if it fails to parse.
+// runCommandString evaluates a single command string and mirrors its status.
 func runCommandString(command string) {
 	eval := evaluator.New()
-	if !runSource(eval, command, "") {
-		os.Exit(1)
+	result := runSource(eval, command, "")
+	if result.status != 0 {
+		os.Exit(result.status)
 	}
 }
 
@@ -128,15 +130,21 @@ func runStdin() {
 		os.Exit(1)
 	}
 	eval := evaluator.New()
-	if !runSource(eval, string(content), "") {
-		os.Exit(1)
+	result := runSource(eval, string(content), "")
+	if result.status != 0 {
+		os.Exit(result.status)
 	}
 }
 
+type sourceResult struct {
+	status        int
+	exitRequested bool
+}
+
 // runSource parses and evaluates a complete source string against the given
-// evaluator. label is used to prefix parse/eval error messages. It reports
-// whether parsing succeeded.
-func runSource(eval *evaluator.Evaluator, source, label string) bool {
+// evaluator. label is used to prefix parse/eval error messages. The result
+// carries both the process status and an explicit exit() request for the REPL.
+func runSource(eval *evaluator.Evaluator, source, label string) sourceResult {
 	l := lexer.NewLexer(source)
 	p := parser.New(l)
 	program := p.ParseProgram()
@@ -148,19 +156,25 @@ func runSource(eval *evaluator.Evaluator, source, label string) bool {
 
 	if len(p.Errors()) > 0 {
 		for _, err := range p.Errors() {
-			fmt.Println(colorize(ansi.Red, fmt.Sprintf("%sparse error: %s", prefix, err)))
+			fmt.Fprintln(os.Stderr, colorize(ansi.Red, fmt.Sprintf("%sparse error: %s", prefix, err)))
 		}
-		return false
+		return sourceResult{status: 2}
 	}
 
 	if err := eval.Eval(program); err != nil {
+		var exit *evaluator.ExitRequest
+		if errors.As(err, &exit) {
+			return sourceResult{status: exit.Status, exitRequested: true}
+		}
 		if errors.Is(err, evaluator.ErrInterrupted) {
 			fmt.Println("^C")
+			return sourceResult{status: 130}
 		} else {
-			fmt.Println(colorize(ansi.Red, fmt.Sprintf("%serror: %s", prefix, err)))
+			fmt.Fprintln(os.Stderr, colorize(ansi.Red, fmt.Sprintf("%serror: %s", prefix, err)))
 		}
+		return sourceResult{status: 1}
 	}
-	return true
+	return sourceResult{status: eval.LastStatus()}
 }
 
 // inputIncomplete reports whether src is an incomplete command that the REPL
@@ -172,12 +186,21 @@ func runSource(eval *evaluator.Evaluator, source, label string) bool {
 func inputIncomplete(src string) bool {
 	depth := 0
 	var inString byte // 0, '\'' or '"'
+	triple := false
 	lastMeaningful := -1
 	for i := 0; i < len(src); i++ {
 		c := src[i]
 		if inString != 0 {
 			lastMeaningful = i
-			if c == inString {
+			if c == '\\' {
+				i++
+				continue
+			}
+			if triple && c == inString && i+2 < len(src) && src[i+1] == c && src[i+2] == c {
+				inString = 0
+				triple = false
+				i += 2
+			} else if !triple && c == inString {
 				inString = 0
 			}
 			continue
@@ -185,6 +208,10 @@ func inputIncomplete(src string) bool {
 		switch c {
 		case '\'', '"':
 			inString = c
+			triple = i+2 < len(src) && src[i+1] == c && src[i+2] == c
+			if triple {
+				i += 2
+			}
 			lastMeaningful = i
 		case '#':
 			for i < len(src) && src[i] != '\n' {
@@ -227,16 +254,17 @@ func inputIncomplete(src string) bool {
 }
 
 // runScript executes a .rsh script file
-func runScript(filename string) {
+func runScript(filename string, args []string) {
 	content, err := os.ReadFile(filename)
 	if err != nil {
-		fmt.Printf("error: cannot read file %s: %v\n", filename, err)
+		fmt.Fprintf(os.Stderr, "error: cannot read file %s: %v\n", filename, err)
 		os.Exit(1)
 	}
 
-	eval := evaluator.New()
-	if !runSource(eval, string(content), "script") {
-		os.Exit(1)
+	eval := evaluator.NewWithArgs(args)
+	result := runSource(eval, string(content), filename)
+	if result.status != 0 {
+		os.Exit(result.status)
 	}
 }
 
@@ -402,7 +430,11 @@ func repl() {
 		}
 
 		eval.ClearInterrupt()
-		runSource(eval, src, "")
+		result := runSource(eval, src, "")
 		buf.Reset()
+		if result.exitRequested {
+			fmt.Println("Goodbye!")
+			break
+		}
 	}
 }

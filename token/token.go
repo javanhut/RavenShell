@@ -5,6 +5,12 @@ type TokenType string
 type Token struct {
 	Type    TokenType
 	Literal string
+	// Offset and End are zero-based byte offsets in the source. Line and Column
+	// are one-based display coordinates used by diagnostics.
+	Offset int
+	End    int
+	Line   int
+	Column int
 	// SingleQuoted is true for string tokens written with single quotes; such
 	// strings are not interpolated.
 	SingleQuoted bool
@@ -48,6 +54,11 @@ const (
 	RAVENHELP        TokenType = "RAVENHELP"
 	RAVENUPDATE      TokenType = "RAVENUPDATE"
 	RAVENCOMPLETIONS TokenType = "RAVENCOMPLETIONS"
+	RAVENALIAS       TokenType = "RAVENALIAS"
+	RAVENUNALIAS     TokenType = "RAVENUNALIAS"
+	RAVENSOURCE      TokenType = "RAVENSOURCE"
+	RAVENUNSET       TokenType = "RAVENUNSET"
+	RAVENTYPE        TokenType = "RAVENTYPE"
 	PS               TokenType = "PS"
 	KILL             TokenType = "KILL"
 	KILLALL          TokenType = "KILLALL"
@@ -135,6 +146,11 @@ var TokenMap = map[string]TokenType{
 	"help":              RAVENHELP, // short alias for raven-help
 	"raven-update":      RAVENUPDATE,
 	"raven-completions": RAVENCOMPLETIONS,
+	"raven-alias":       RAVENALIAS,
+	"raven-unalias":     RAVENUNALIAS,
+	"raven-source":      RAVENSOURCE,
+	"raven-unset":       RAVENUNSET,
+	"raven-type":        RAVENTYPE,
 	"ps":                PS,
 	"kill":              KILL,
 	"killall":           KILLALL,

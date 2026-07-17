@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -68,6 +69,9 @@ type Evaluator struct {
 	vars         map[string]Value                  // Global script variables (== scopes[0])
 	scopes       []map[string]Value                // Variable scope chain; innermost is last
 	funcs        map[string]*ast.FunctionStatement // User-defined functions
+	aliases      map[string][]string               // Interactive command aliases
+	aliasDepth   int                               // Guards recursive aliases
+	sourceDepth  int                               // Guards recursive raven-source calls
 	searchPaths  []string                          // Extra executable search dirs (raven-add path)
 	defaultPaths []string                          // Standard system executable dirs for this OS
 	stdout       io.Writer                         // Standard output (for redirections)
@@ -89,6 +93,22 @@ type Evaluator struct {
 // ErrInterrupted is returned when evaluation is interrupted by SIGINT (Ctrl-C).
 var ErrInterrupted = errors.New("interrupted")
 
+// ExitRequest is the structured control signal produced by exit(). Hosts can
+// distinguish it from a runtime failure and terminate with the requested code.
+type ExitRequest struct{ Status int }
+
+func (e *ExitRequest) Error() string { return fmt.Sprintf("exit requested with status %d", e.Status) }
+
+// RuntimeError attaches source coordinates to an evaluation failure.
+type RuntimeError struct {
+	Line   int
+	Column int
+	Cause  error
+}
+
+func (e *RuntimeError) Error() string { return fmt.Sprintf("%d:%d: %v", e.Line, e.Column, e.Cause) }
+func (e *RuntimeError) Unwrap() error { return e.Cause }
+
 // New creates a new Evaluator
 func New() *Evaluator {
 	cwd, _ := os.Getwd()
@@ -99,6 +119,7 @@ func New() *Evaluator {
 		vars:      global,
 		scopes:    []map[string]Value{global},
 		funcs:     make(map[string]*ast.FunctionStatement),
+		aliases:   make(map[string][]string),
 		stdout:    os.Stdout,
 		stderr:    os.Stderr,
 		stdin:     os.Stdin,
@@ -108,6 +129,29 @@ func New() *Evaluator {
 	e.loadSearchPaths()
 	return e
 }
+
+// NewWithArgs creates an evaluator and exposes script arguments through the
+// global RavenScript `args` array. The script filename is intentionally not
+// included: RavenScript treats arguments as language data rather than emulating
+// a POSIX shell's numbered variables.
+func NewWithArgs(args []string) *Evaluator {
+	e := New()
+	e.SetScriptArgs(args)
+	return e
+}
+
+// SetScriptArgs replaces the global `args` array.
+func (e *Evaluator) SetScriptArgs(args []string) {
+	values := make([]Value, len(args))
+	for i, arg := range args {
+		values[i] = arg
+	}
+	e.scopes[0]["args"] = values
+}
+
+// LastStatus returns the status produced by the most recently evaluated
+// command. It is used by non-interactive entry points as their process status.
+func (e *Evaluator) LastStatus() int { return e.lastStatus }
 
 // defaultExecPaths returns the standard system executable directories for the
 // host OS, plus common per-user bin dirs that exist. They are always searched
@@ -261,6 +305,23 @@ func (e *Evaluator) Eval(program *ast.Program) error {
 }
 
 func (e *Evaluator) evalStatement(stmt ast.Statement) error {
+	err := e.evalStatementRaw(stmt)
+	if err == nil {
+		return nil
+	}
+	if _, ok := asControl(err); ok || errors.Is(err, ErrInterrupted) {
+		return err
+	}
+	var exit *ExitRequest
+	var runtimeErr *RuntimeError
+	if errors.As(err, &exit) || errors.As(err, &runtimeErr) {
+		return err
+	}
+	tok := statementToken(stmt)
+	return &RuntimeError{Line: tok.Line, Column: tok.Column, Cause: err}
+}
+
+func (e *Evaluator) evalStatementRaw(stmt ast.Statement) error {
 	switch s := stmt.(type) {
 	case *ast.ExpressionStatement:
 		_, err := e.evalExpressionValue(s.Expression)
@@ -284,6 +345,33 @@ func (e *Evaluator) evalStatement(stmt ast.Statement) error {
 		return e.evalReturnStatement(s)
 	}
 	return nil
+}
+
+func statementToken(stmt ast.Statement) token.Token {
+	switch node := stmt.(type) {
+	case *ast.ExpressionStatement:
+		return node.Token
+	case *ast.AssignmentStatement:
+		return node.Token
+	case *ast.ForStatement:
+		return node.Token
+	case *ast.WhileStatement:
+		return node.Token
+	case *ast.IfStatement:
+		return node.Token
+	case *ast.BlockStatement:
+		return node.Token
+	case *ast.BreakStatement:
+		return node.Token
+	case *ast.ContinueStatement:
+		return node.Token
+	case *ast.FunctionStatement:
+		return node.Token
+	case *ast.ReturnStatement:
+		return node.Token
+	default:
+		return token.Token{Line: 1, Column: 1}
+	}
 }
 
 // evalReturnStatement evaluates the return value (if any) and raises a return
@@ -339,6 +427,12 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 		// Check if it's a variable first
 		if val, ok := e.getVar(node.Value); ok {
 			return val, nil
+		}
+		if node.Value == "true" {
+			return true, nil
+		}
+		if node.Value == "false" {
+			return false, nil
 		}
 		return node.Value, nil
 	case *ast.PathExpression:
@@ -485,7 +579,16 @@ func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
 		return "", err
 	}
 
-	result, err := e.dispatchCommand(cmd, args)
+	var result string
+	if cmd.Type == ast.CMD_EXTERNAL {
+		if expansion, ok := e.aliases[cmd.Name]; ok {
+			result, err = e.execAlias(cmd.Name, expansion, args)
+		} else {
+			result, err = e.dispatchCommand(cmd, args)
+		}
+	} else {
+		result, err = e.dispatchCommand(cmd, args)
+	}
 
 	// Track exit status for $?. External commands set their own status; other
 	// commands are 0 on success and 1 on error.
@@ -547,7 +650,7 @@ func (e *Evaluator) dispatchCommand(cmd *ast.Command, args []string) (string, er
 	case ast.CMD_CURRENTDIR:
 		return e.execCurrentDir()
 	case ast.CMD_MAKEDIR:
-		return e.execMakeDir(args)
+		return e.execMakeDir(cmd.Name, args)
 	case ast.CMD_REMOVEDIR:
 		return e.execRemoveDir(args)
 	case ast.CMD_REMOVE:
@@ -576,6 +679,16 @@ func (e *Evaluator) dispatchCommand(cmd *ast.Command, args []string) (string, er
 		return e.execRavenUpdate(args)
 	case ast.CMD_RAVENCOMPLETIONS:
 		return e.execRavenCompletions(args)
+	case ast.CMD_RAVENALIAS:
+		return e.execRavenAlias(args)
+	case ast.CMD_RAVENUNALIAS:
+		return e.execRavenUnalias(args)
+	case ast.CMD_RAVENSOURCE:
+		return e.execRavenSource(args)
+	case ast.CMD_RAVENUNSET:
+		return e.execRavenUnset(args)
+	case ast.CMD_RAVENTYPE:
+		return e.execRavenType(args)
 	case ast.CMD_PS:
 		return e.execPs(args)
 	case ast.CMD_KILL:
@@ -754,25 +867,109 @@ func (e *Evaluator) buildEnv() []string {
 }
 
 func (e *Evaluator) evalPipe(pipe *ast.PipeExpression) (string, error) {
-	// Capture output from left command
-	var leftOutput bytes.Buffer
-	oldStdout := e.stdout
-	e.stdout = &leftOutput
-
-	_, err := e.evalExpression(pipe.Left)
-	e.stdout = oldStdout
-	if err != nil {
-		return "", err
+	var stages []ast.Expression
+	flattenPipeline(pipe, &stages)
+	if len(stages) < 2 {
+		return e.evalExpression(stages[0])
 	}
 
-	// Use left output as input for right command
-	oldStdin := e.stdin
-	e.stdin = &leftOutput
+	// io.Pipe provides bounded, streaming backpressure. Every stage starts
+	// concurrently, so infinite producers work with bounded consumers
+	// (`yes | head`) and large pipelines do not accumulate in memory.
+	readers := make([]*io.PipeReader, len(stages)-1)
+	writers := make([]*io.PipeWriter, len(stages)-1)
+	for i := range readers {
+		readers[i], writers[i] = io.Pipe()
+	}
 
-	result, err := e.evalExpression(pipe.Right)
-	e.stdin = oldStdin
+	type stageResult struct {
+		index  int
+		value  string
+		status int
+		err    error
+	}
+	results := make(chan stageResult, len(stages))
+	for i, stage := range stages {
+		var stdin io.Reader = e.stdin
+		var stdout io.Writer = e.stdout
+		if i > 0 {
+			stdin = readers[i-1]
+		}
+		if i < len(stages)-1 {
+			stdout = writers[i]
+		}
 
-	return result, err
+		go func(index int, expression ast.Expression, in io.Reader, out io.Writer) {
+			if index > 0 {
+				defer readers[index-1].Close()
+			}
+			if index < len(stages)-1 {
+				defer writers[index].Close()
+			}
+			child := e.forkForPipeline(in, out)
+			value, err := child.evalExpression(expression)
+			status := child.lastStatus
+			if err != nil {
+				status = 1
+			}
+			results <- stageResult{index: index, value: value, status: status, err: err}
+		}(i, stage, stdin, stdout)
+	}
+
+	completed := make([]stageResult, len(stages))
+	for range stages {
+		result := <-results
+		completed[result.index] = result
+	}
+	last := completed[len(completed)-1]
+	e.lastStatus = last.status
+	for _, result := range completed {
+		if result.err != nil {
+			return "", result.err
+		}
+	}
+	return last.value, nil
+}
+
+func flattenPipeline(expression ast.Expression, stages *[]ast.Expression) {
+	if pipe, ok := expression.(*ast.PipeExpression); ok {
+		flattenPipeline(pipe.Left, stages)
+		flattenPipeline(pipe.Right, stages)
+		return
+	}
+	*stages = append(*stages, expression)
+}
+
+// forkForPipeline creates a subshell-like evaluator for one concurrent stage.
+// Mutable language state is copied so assignments or cd in a stage neither race
+// with sibling stages nor leak back into the parent evaluator.
+func (e *Evaluator) forkForPipeline(stdin io.Reader, stdout io.Writer) *Evaluator {
+	scopes := make([]map[string]Value, len(e.scopes))
+	for i, scope := range e.scopes {
+		scopes[i] = maps.Clone(scope)
+	}
+	aliases := make(map[string][]string, len(e.aliases))
+	for name, expansion := range e.aliases {
+		aliases[name] = append([]string(nil), expansion...)
+	}
+	return &Evaluator{
+		cwd:            e.cwd,
+		env:            maps.Clone(e.env),
+		vars:           scopes[0],
+		scopes:         scopes,
+		funcs:          maps.Clone(e.funcs),
+		aliases:        aliases,
+		sourceDepth:    e.sourceDepth,
+		searchPaths:    append([]string(nil), e.searchPaths...),
+		defaultPaths:   append([]string(nil), e.defaultPaths...),
+		stdout:         stdout,
+		stderr:         e.stderr,
+		stdin:          stdin,
+		lastStatus:     e.lastStatus,
+		nextJobID:      1,
+		execCache:      append([]string(nil), e.execCache...),
+		execCacheValid: e.execCacheValid,
+	}
 }
 
 func (e *Evaluator) evalRedirection(redir *ast.RedirectionExpression) (string, error) {
@@ -1097,15 +1294,23 @@ func (e *Evaluator) execCurrentDir() (string, error) {
 	return e.cwd, nil
 }
 
-func (e *Evaluator) execMakeDir(args []string) (string, error) {
-	args = stripFlags(args)
-	if len(args) == 0 {
+func (e *Evaluator) execMakeDir(commandName string, args []string) (string, error) {
+	paths, flags := parseFlags(args)
+	if len(paths) == 0 {
 		return "", fmt.Errorf("mkdir: missing operand")
 	}
-
-	for _, arg := range args {
+	// makedir is RavenShell's intentionally convenient spelling; mkdir retains
+	// the conventional requirement for -p when parents are missing.
+	parents := commandName == "makedir" || hasFlag(flags, "p", "parents")
+	for _, arg := range paths {
 		path := e.resolvePath(arg)
-		if err := os.MkdirAll(path, 0755); err != nil {
+		var err error
+		if parents {
+			err = os.MkdirAll(path, 0755)
+		} else {
+			err = os.Mkdir(path, 0755)
+		}
+		if err != nil {
 			return "", fmt.Errorf("mkdir: %v", err)
 		}
 	}
@@ -1139,14 +1344,30 @@ func (e *Evaluator) execRemoveDir(args []string) (string, error) {
 }
 
 func (e *Evaluator) execRemove(args []string) (string, error) {
-	args = stripFlags(args)
-	if len(args) == 0 {
+	paths, flags := parseFlags(args)
+	if len(paths) == 0 {
 		return "", fmt.Errorf("rm: missing operand")
 	}
-
-	for _, arg := range args {
+	recursive := hasFlag(flags, "r", "R", "recursive")
+	force := hasFlag(flags, "f", "force")
+	for _, arg := range paths {
 		path := e.resolvePath(arg)
-		if err := os.RemoveAll(path); err != nil {
+		info, err := os.Lstat(path)
+		if err != nil {
+			if force && os.IsNotExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("rm: %v", err)
+		}
+		if info.IsDir() && !recursive {
+			return "", fmt.Errorf("rm: %s is a directory (use -r/--recursive)", arg)
+		}
+		if recursive {
+			err = os.RemoveAll(path)
+		} else {
+			err = os.Remove(path)
+		}
+		if err != nil && !(force && os.IsNotExist(err)) {
 			return "", fmt.Errorf("rm: %v", err)
 		}
 	}
@@ -1161,11 +1382,17 @@ func (e *Evaluator) execMakeFile(args []string) (string, error) {
 
 	for _, arg := range args {
 		path := e.resolvePath(arg)
-		file, err := os.Create(path)
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			return "", fmt.Errorf("mkfile: %v", err)
 		}
-		file.Close()
+		if err := file.Close(); err != nil {
+			return "", fmt.Errorf("mkfile: %v", err)
+		}
+		now := time.Now()
+		if err := os.Chtimes(path, now, now); err != nil {
+			return "", fmt.Errorf("mkfile: %v", err)
+		}
 	}
 	return "", nil
 }
@@ -1360,6 +1587,9 @@ func (e *Evaluator) AvailableCommands() []string {
 		set[name] = true
 	}
 	for name := range e.funcs {
+		set[name] = true
+	}
+	for name := range e.aliases {
 		set[name] = true
 	}
 	for _, name := range builtinCommandNames() {
@@ -1731,6 +1961,24 @@ func (e *Evaluator) evalCallExpression(node *ast.CallExpression) (Value, error) 
 	}
 
 	switch node.Function {
+	case "exit":
+		status := int64(0)
+		if len(args) > 1 {
+			return nil, fmt.Errorf("exit() takes zero or one argument")
+		}
+		if len(args) == 1 {
+			var err error
+			status, err = e.valueToInt64(args[0])
+			if err != nil || status < 0 || status > 255 {
+				return nil, fmt.Errorf("exit() status must be an integer from 0 to 255")
+			}
+		}
+		return nil, &ExitRequest{Status: int(status)}
+	case "lastStatus":
+		if len(args) != 0 {
+			return nil, fmt.Errorf("lastStatus() takes no arguments")
+		}
+		return int64(e.lastStatus), nil
 	case "len":
 		return e.builtinLen(args)
 	case "split":

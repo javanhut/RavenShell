@@ -36,7 +36,7 @@ ls
 cd ..
 
 # Clean up
-rm test_dir
+rm --recursive test_dir
 ```
 
 ### System Information

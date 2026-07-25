@@ -321,7 +321,21 @@ func (e *Evaluator) evalStatement(stmt ast.Statement) error {
 	return &RuntimeError{Line: tok.Line, Column: tok.Column, Cause: err}
 }
 
-func (e *Evaluator) evalStatementRaw(stmt ast.Statement) error {
+func (e *Evaluator) evalStatementRaw(stmt ast.Statement) (err error) {
+	// A bug in the evaluator must not kill the shell. Recover the panic as an
+	// ordinary evaluation error (evalStatement stamps line:column onto it) and
+	// restore the streams a redirection or command substitution was unwound
+	// past, since those swap e.stdout/stderr/stdin back without a defer.
+	// Control flow (break/continue/return, exit, ^C) travels by error, never by
+	// panic, so nothing here can swallow it.
+	out, errOut, in := e.stdout, e.stderr, e.stdin
+	defer func() {
+		if r := recover(); r != nil {
+			e.stdout, e.stderr, e.stdin = out, errOut, in
+			e.lastStatus = 1
+			err = fmt.Errorf("internal error: %v", r)
+		}
+	}()
 	switch s := stmt.(type) {
 	case *ast.ExpressionStatement:
 		_, err := e.evalExpressionValue(s.Expression)
@@ -450,6 +464,12 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 	case *ast.IntegerLiteral:
 		return node.Value, nil
 	case *ast.VariableReference:
+		// A shell variable keeps its type, so `$x - 1` is arithmetic rather
+		// than a failed string subtraction. Names that only exist in the
+		// environment stay strings.
+		if val, ok := e.getVar(node.Name.Value); ok {
+			return val, nil
+		}
 		return e.expandVariable(node.Name.Value), nil
 	case *ast.LastStatus:
 		return int64(e.lastStatus), nil
@@ -618,13 +638,49 @@ func (e *Evaluator) evalArgs(arguments []ast.Expression, external bool) ([]strin
 		}
 		if arr, ok := val.([]Value); ok {
 			for _, el := range arr {
-				args = append(args, e.valueToString(el))
+				args = append(args, e.expandGlob(arg, e.valueToString(el))...)
 			}
 		} else {
-			args = append(args, e.valueToString(val))
+			args = append(args, e.expandGlob(arg, e.valueToString(val))...)
 		}
 	}
 	return args, nil
+}
+
+// expandGlob expands an unquoted argument word containing a glob metacharacter
+// into its sorted matches. Quoted words keep their StringLiteral shape and are
+// never expanded, and a pattern that matches nothing is passed through
+// verbatim, the way bash does.
+func (e *Evaluator) expandGlob(arg ast.Expression, s string) []string {
+	switch arg.(type) {
+	case *ast.PathExpression, *ast.WordExpression, *ast.BraceExpression:
+	default:
+		return []string{s}
+	}
+	if !strings.ContainsAny(s, "*?[") {
+		return []string{s}
+	}
+	matches, err := e.builtinGlob([]Value{s})
+	if err != nil {
+		return []string{s} // bad pattern: keep the word text, not an error
+	}
+	hidden := strings.HasPrefix(filepath.Base(s), ".")
+	var out []string
+	for _, m := range matches.([]Value) {
+		name := e.valueToString(m)
+		// filepath.Glob's '*' matches a leading dot but a shell's does not, so
+		// `rm *` must not sweep up .git or .env.
+		// ponytail: only the last segment is checked (*/.git/* is not);
+		// per-segment matching if someone hits it.
+		if !hidden && strings.HasPrefix(filepath.Base(name), ".") {
+			continue
+		}
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return []string{s}
+	}
+	return out
 }
 
 // evalArg evaluates a single command argument. For external commands a path
@@ -900,6 +956,14 @@ func (e *Evaluator) evalPipe(pipe *ast.PipeExpression) (string, error) {
 		}
 
 		go func(index int, expression ast.Expression, in io.Reader, out io.Writer) {
+			// A panic in a goroutine is unrecoverable from the parent, so each
+			// stage guards itself. Declared first so it runs after the pipe
+			// closes below, and so the parent never blocks forever on results.
+			defer func() {
+				if r := recover(); r != nil {
+					results <- stageResult{index: index, status: 1, err: fmt.Errorf("internal error: %v", r)}
+				}
+			}()
 			if index > 0 {
 				defer readers[index-1].Close()
 			}
@@ -1116,15 +1180,9 @@ func hasFlag(flags map[string]bool, names ...string) bool {
 const lsRowsPerColumn = 10
 
 func (e *Evaluator) execList(args []string) (string, error) {
-	args = stripFlags(args)
-	dir := e.cwd
-	if len(args) > 0 {
-		dir = e.resolvePath(args[0])
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", fmt.Errorf("ls: %v", err)
+	operands := stripFlags(args)
+	if len(operands) == 0 {
+		operands = []string{e.cwd}
 	}
 
 	color := e.colorOutput()
@@ -1132,17 +1190,35 @@ func (e *Evaluator) execList(args []string) (string, error) {
 	// Build the visible names (with a trailing / for directories), their colored
 	// display forms, and the plain one-per-line listing that is returned for
 	// pipes and command substitution.
-	names := make([]string, len(entries))
-	display := make([]string, len(entries))
+	var names, display []string
 	var plain bytes.Buffer
-	for i, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() {
-			name += "/"
+	for _, arg := range operands {
+		info, err := os.Stat(e.resolvePath(arg))
+		if err != nil {
+			return "", fmt.Errorf("ls: %v", err)
 		}
-		names[i] = name
-		display[i] = e.colorizeEntry(entry, name, color)
-		plain.WriteString(name + "\n")
+		if !info.IsDir() {
+			// Operands that are not directories - the file names a glob such as
+			// `ls *.txt` expands to - list as themselves.
+			// ponytail: no colorizeEntry here, it needs an os.DirEntry.
+			names = append(names, arg)
+			display = append(display, arg)
+			plain.WriteString(arg + "\n")
+			continue
+		}
+		entries, err := os.ReadDir(e.resolvePath(arg))
+		if err != nil {
+			return "", fmt.Errorf("ls: %v", err)
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() {
+				name += "/"
+			}
+			names = append(names, name)
+			display = append(display, e.colorizeEntry(entry, name, color))
+			plain.WriteString(name + "\n")
+		}
 	}
 
 	// To an interactive terminal, lay the entries out in columns. When the
@@ -2371,25 +2447,42 @@ func (e *Evaluator) evalLogical(node *ast.LogicalExpression) (Value, error) {
 	return nil, nil
 }
 
-// builtinRange implements range(n) - returns [0, 1, 2, ..., n-1]
+// maxRangeLen bounds range() so a typo can't OOM the shell.
+const maxRangeLen = 10_000_000
+
+// builtinRange implements range(stop) and range(start, stop) - returns
+// [start, start+1, ..., stop-1]; an empty range when stop <= start.
 func (e *Evaluator) builtinRange(args []ast.Expression) (Value, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("range() takes exactly 1 argument")
+	if len(args) != 1 && len(args) != 2 {
+		return nil, fmt.Errorf("range() takes 1 or 2 arguments")
 	}
 
-	val, err := e.evalExpressionValue(args[0])
-	if err != nil {
-		return nil, err
+	nums := make([]int64, len(args))
+	for i, arg := range args {
+		val, err := e.evalExpressionValue(arg)
+		if err != nil {
+			return nil, err
+		}
+		if nums[i], err = e.valueToInt64(val); err != nil {
+			return nil, fmt.Errorf("range() arguments must be integers")
+		}
 	}
 
-	n, err := e.valueToInt64(val)
-	if err != nil {
-		return nil, fmt.Errorf("range() argument must be an integer")
+	start, stop := int64(0), nums[0]
+	if len(nums) == 2 {
+		start, stop = nums[0], nums[1]
+	}
+	if stop <= start {
+		return []Value{}, nil
+	}
+	// ponytail: fixed cap, make it configurable if anyone ever needs a bigger literal array
+	if n := stop - start; n > maxRangeLen || n < 0 { // n < 0 means the subtraction overflowed
+		return nil, fmt.Errorf("range() is too large (max %d elements)", maxRangeLen)
 	}
 
-	result := make([]Value, n)
-	for i := range n {
-		result[i] = i
+	result := make([]Value, 0, stop-start)
+	for i := start; i < stop; i++ {
+		result = append(result, i)
 	}
 	return result, nil
 }

@@ -84,6 +84,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.prefixParseFns = make(map[token.TokenType]prefixParseFn)
 	p.registerPrefix(token.IDENT, p.parseIdentifierOrCommand)
 	p.registerPrefix(token.INTEGER, p.parseIntegerLiteral)
+	p.registerPrefix(token.MINUS, p.parseNegation)
 	p.registerPrefix(token.STRING, p.parseStringLiteral)
 	p.registerPrefix(token.FLAG, p.parseFlagLiteral)
 	p.registerPrefix(token.LASTSTATUS, p.parseLastStatus)
@@ -309,8 +310,10 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 	leftExp := prefix()
 	p.prefixCmdPos = false
 
-	// Continue parsing infix expressions while precedence allows
-	for !p.peekTokenIs(token.EOF) && precedence < p.peekPrecedence() {
+	// Continue parsing infix expressions while precedence allows. A newline ends
+	// the statement, so an operator that starts the next line is that line's own
+	// text (`/bin/echo hi`, `*.txt`) rather than an infix operator on this one.
+	for !p.peekTokenIs(token.EOF) && !p.peekToken.PrecededByNewline && precedence < p.peekPrecedence() {
 		infix := p.infixParseFns[p.peekToken.Type]
 		if infix == nil {
 			return leftExp
@@ -373,7 +376,7 @@ func (p *Parser) finishExternalCommand(name string) ast.Expression {
 		Name:  name,
 		Type:  ast.CMD_EXTERNAL,
 	}
-	cmd.Arguments = p.parseArguments()
+	cmd.Arguments = p.parseArguments(false)
 	return cmd
 }
 
@@ -385,7 +388,10 @@ func (p *Parser) finishExternalCommand(name string) ast.Expression {
 // literal argument words rather than dispatched as commands of their own. This
 // is what lets `podman ls`, `sudo rm -rf x`, or `grep for main.go` pass the
 // keyword to the command instead of being split into two separate commands.
-func (p *Parser) parseArguments() []ast.Expression {
+// arith reports whether a command's arguments should absorb spaced arithmetic
+// operators (`print 10 - 4` prints 6). Only the output builtins do; for every
+// other command `echo a - b` must stay three literal words.
+func (p *Parser) parseArguments(arith bool) []ast.Expression {
 	args := []ast.Expression{}
 
 	for p.peekStartsArgument() {
@@ -399,10 +405,51 @@ func (p *Parser) parseArguments() []ast.Expression {
 		}
 
 		p.nextToken()
-		args = append(args, p.parseArgument())
+		arg := p.parseArgument()
+		if arith {
+			args = p.parseArithmeticTail(args, arg)
+			continue
+		}
+		args = append(args, arg)
 	}
 
 	return args
+}
+
+// parseArithmeticTail extends an argument into an arithmetic expression while
+// the next token is a +, -, *, / or % with whitespace on *both* sides — the
+// shell's convention that arithmetic operators are spaced and glued ones (+x,
+// -1, *.txt) are word text. Only operands that can actually be arithmetic are
+// extended, so `print Done - all good` stays four literal words.
+func (p *Parser) parseArithmeticTail(args []ast.Expression, left ast.Expression) []ast.Expression {
+	for isArithOperand(left) && p.peekToken.PrecededByWhitespace && !p.peekToken.PrecededByNewline {
+		switch p.peekToken.Type {
+		case token.PLUS, token.MINUS, token.ASTERISK, token.FSLASH, token.PERCENT:
+			p.nextToken()
+			if !p.peekToken.PrecededByWhitespace || p.peekToken.PrecededByNewline || !p.peekStartsArgument() {
+				// No operand after the operator (glued word, end of line, end of
+				// command): the operator itself is word text and starts a new
+				// argument.
+				args = append(args, left)
+				left = p.parseArgument()
+				continue
+			}
+			left = p.parseInfixExpression(left)
+		default:
+			return append(args, left)
+		}
+	}
+	return append(args, left)
+}
+
+// isArithOperand reports whether an argument can be the left side of spaced
+// arithmetic. Words, paths and strings cannot - they are literal text.
+func isArithOperand(e ast.Expression) bool {
+	switch e.(type) {
+	case *ast.IntegerLiteral, *ast.CallExpression, *ast.InfixExpression, *ast.VariableReference:
+		return true
+	}
+	return false
 }
 
 // peekStartsArgument reports whether the peek token can begin another argument
@@ -460,6 +507,12 @@ func isWordBoundary(t token.TokenType) bool {
 // VariableReference — so existing consumers (and tests) see the same shapes as
 // before for ordinary arguments.
 func (p *Parser) parseArgument() ast.Expression {
+	// A word glued to '(' is a function call, not a literal word: `print len(x)`,
+	// `print range(1, 5)`, `print add(3, 4)`. Same rule as in expression position.
+	if p.peekTokenIs(token.LPAREN) && !p.peekToken.PrecededByWhitespace && isCleanWord(p.curToken.Literal) {
+		return p.parseCallExpression()
+	}
+
 	firstTok := p.curToken
 	var parts []ast.Expression // literal runs and expansion parts, in order
 	var lit strings.Builder    // current run of glued literal text
@@ -657,7 +710,7 @@ func (p *Parser) parseCommand(cmdTokenType token.TokenType) ast.Expression {
 	}
 
 	// Parse arguments until we hit an operator or EOF
-	cmd.Arguments = p.parseArguments()
+	cmd.Arguments = p.parseArguments(cmdTokenType == token.PRINT || cmdTokenType == token.OUTPUT)
 
 	return cmd
 }
@@ -701,6 +754,31 @@ func (p *Parser) isPathContinuation(tok token.Token) bool {
 		return true
 	}
 	return false
+}
+
+// parseNegation parses a leading '-': `-5`, `-x`, `-(a + b)`. Literals are
+// folded into a negative IntegerLiteral so command args keep printing as "-5";
+// anything else desugars to `0 - operand` rather than needing a new AST node.
+func (p *Parser) parseNegation() ast.Expression {
+	minus := p.curToken
+	p.nextToken()
+
+	operand := p.parseExpression(PREFIX)
+	if operand == nil {
+		return nil
+	}
+
+	if lit, ok := operand.(*ast.IntegerLiteral); ok {
+		lit.Value = -lit.Value
+		lit.Token.Literal = "-" + lit.Token.Literal
+		return lit
+	}
+	return &ast.InfixExpression{
+		Token:    minus,
+		Left:     &ast.IntegerLiteral{Token: token.Token{Type: token.INTEGER, Literal: "0"}},
+		Operator: "-",
+		Right:    operand,
+	}
 }
 
 func (p *Parser) parseIntegerLiteral() ast.Expression {

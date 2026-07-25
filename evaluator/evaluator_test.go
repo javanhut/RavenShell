@@ -70,6 +70,94 @@ func TestRangeAndAppend(t *testing.T) {
 	}
 }
 
+// print evaluates spaced arithmetic; every other command keeps its words literal.
+func TestPrintArithmetic(t *testing.T) {
+	src := `c = 3
+print 10 - c
+print 2 + 3 * 4
+print len("ab") + 1
+print hello world
+print -5
+print 2*3
+print 5 -1
+print Done - all good
+print 1 -
+print 2
+echo 10 - 4
+output 7 - 2`
+	want := []string{"7", "14", "3", "hello world", "-5", "2*3", "5 -1", "Done - all good", "1 -", "2", "10 - 4", "5"}
+	_, out := run(t, src)
+	got := strings.Split(strings.TrimSpace(out), "\n")
+	if !slices.Equal(got, want) {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+// Function calls used to be swallowed as literal command words: `print len("ab")`
+// printed "len".
+func TestCallAsCommandArgument(t *testing.T) {
+	src := `fn add(a, b) { return a + b }
+print len("ab")
+print upper("ravenshell")
+print range(1, 3)
+print add(3, 4)
+print notacall (1)`
+	want := []string{"2", "RAVENSHELL", "1 2", "7", "notacall"}
+	_, out := run(t, src)
+	got := strings.Split(strings.TrimSpace(out), "\n")
+	if !slices.Equal(got, want) {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+func TestUnaryMinus(t *testing.T) {
+	e, _ := run(t, "a = -5\nb = 2 - -3\nc = -2 * 3\nd = 10 - 4\nx = 5\nn = -(x)")
+	for name, want := range map[string]int64{"a": -5, "b": 5, "c": -6, "d": 6, "n": -5} {
+		if got := e.vars[name]; got != want {
+			t.Errorf("%s = %v, want %d", name, got, want)
+		}
+	}
+}
+
+// TestVarReferenceKeepsType guards `$x - 1`: $x must yield the variable's
+// stored value, not its string form, while interpolation stays textual.
+func TestVarReferenceKeepsType(t *testing.T) {
+	e, out := run(t, "x = 5\ny = $x - 1\nprint \"v: $x\"")
+	if got := e.vars["y"]; got != int64(4) {
+		t.Errorf("y = %v (%T), want 4", got, got)
+	}
+	if strings.TrimSpace(out) != "v: 5" {
+		t.Errorf("output = %q, want \"v: 5\"", out)
+	}
+}
+
+func TestRangeStartStop(t *testing.T) {
+	e, out := run(t, "x = range(1, 5)\nfor i in range(2, 4) { print i }")
+	arr, ok := e.vars["x"].([]Value)
+	if !ok || len(arr) != 4 || arr[0] != int64(1) || arr[3] != int64(4) {
+		t.Errorf("range(1, 5) = %v, want [1 2 3 4]", e.vars["x"])
+	}
+	if strings.Fields(out)[0] != "2" || len(strings.Fields(out)) != 2 {
+		t.Errorf("for i in range(2, 4) printed %q, want 2 3", out)
+	}
+}
+
+func TestRangeBounds(t *testing.T) {
+	// negative counts used to panic in make([]Value, n)
+	e, _ := run(t, "n = 0 - 5\nx = range(n)\ny = range(0)\nz = range(5, 5)\nw = range(9, 2)")
+	for _, name := range []string{"x", "y", "z", "w"} {
+		if arr, ok := e.vars[name].([]Value); !ok || len(arr) != 0 {
+			t.Errorf("%s = %v, want []", name, e.vars[name])
+		}
+	}
+
+	src := "x = range(999999999999)"
+	l := lexer.NewLexer(src)
+	if err := New().Eval(parser.New(l).ParseProgram()); err == nil {
+		t.Error("range(999999999999) should error, not allocate")
+	}
+}
+
 func TestIfElse(t *testing.T) {
 	_, out := run(t, `if 5 > 3 { print "yes" } else { print "no" }`)
 	if strings.TrimSpace(out) != "yes" {
@@ -523,5 +611,19 @@ func TestExternalArgsNotAbsolutized(t *testing.T) {
 		if got := strings.TrimSpace(out); got != c.want {
 			t.Errorf("%q: got %q, want %q", c.src, got, c.want)
 		}
+	}
+}
+
+// A nil Consequence makes evalBlockStatement dereference a nil block, standing
+// in for any internal bug: it must surface as an error, not kill the shell.
+func TestPanicRecoveredAsError(t *testing.T) {
+	e := New()
+	stmt := &ast.IfStatement{Condition: &ast.IntegerLiteral{Value: 1}}
+	err := e.Eval(&ast.Program{Statements: []ast.Statement{stmt}})
+	if err == nil || !strings.Contains(err.Error(), "internal error") {
+		t.Fatalf("err = %v, want internal error", err)
+	}
+	if e.lastStatus != 1 {
+		t.Errorf("lastStatus = %d, want 1", e.lastStatus)
 	}
 }

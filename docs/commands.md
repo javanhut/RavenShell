@@ -257,6 +257,11 @@ print [arguments...]
 
 **Behavior:**
 - Prints arguments joined by spaces, followed by a newline.
+- Arithmetic with spaces around the operator is evaluated when the left side is
+  a number, variable or call (`print 10 - 4` prints `6`). An operator glued to a
+  word (`+x`, `-1`, `*.txt`, `2*3`) or following a plain word (`print Done - all
+  good`) stays literal text.
+- Function calls are evaluated (`print len("ab")` prints `2`).
 - When used with a pipe, prints the piped input.
 
 **Examples:**
@@ -264,6 +269,7 @@ print [arguments...]
 print "Hello, World!"
 print name
 print 1 + 2
+print len(items) - 1
 print "Value:" count
 ls | print
 ```

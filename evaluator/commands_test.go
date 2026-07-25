@@ -282,3 +282,27 @@ func TestBuiltinsInCompletion(t *testing.T) {
 		}
 	}
 }
+
+// TestGlobExpandsCommandArgs checks unquoted patterns expand to sorted matches
+// (hidden files excluded), quoted patterns stay literal, a pattern that matches
+// nothing is passed through, and `ls` lists every globbed operand (files as
+// themselves, directories by their entries).
+func TestGlobExpandsCommandArgs(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt", "c.log", ".hidden.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "inner.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, out := runIn(t, dir, "print *.txt\nprint \"*.txt\"\nprint *.md\nprint a.txt *.txt\nls *.log\nls *")
+	want := "a.txt b.txt\n*.txt\n*.md\na.txt a.txt b.txt\nc.log\na.txt\nb.txt\nc.log\ninner.txt\n"
+	if out != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+}

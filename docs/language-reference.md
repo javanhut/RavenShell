@@ -203,6 +203,17 @@ result = 10 + 5 * 2     # 20 (multiplication first)
 remainder = 17 % 5       # 2
 ```
 
+All arithmetic is 64-bit signed integer — there are no floating point literals
+in the language. `/` truncates toward zero, `%` is the remainder, and dividing
+or taking the modulo of zero is an error.
+
+```rsh
+print 10 / 4       # 2
+print -7 / 2       # -3
+print 10 % 4       # 2
+print 10 / 0       # error: division by zero
+```
+
 > **Spacing matters for `-`.** Put spaces around arithmetic operators
 > (`a - b`). A `-` glued to a word (`-l`, `--all`) is parsed as a command
 > *flag*, and a `-` between word characters (`docker-compose`) is part of an
@@ -411,16 +422,18 @@ print x                 # 100 (unchanged)
 
 ## Built-in Functions
 
-### range(n)
+### range(stop) / range(start, stop)
 
-Returns an array of integers from 0 to n-1.
+Returns an array of integers from `start` (default 0) up to but not including `stop`.
 
-**Syntax:** `range(n)`
+**Syntax:** `range(stop)` or `range(start, stop)`
 
 **Arguments:**
-- `n`: Integer specifying the count
+- `start`: Optional integer to start at (default 0)
+- `stop`: Integer to stop before
 
-**Returns:** Array `[0, 1, 2, ..., n-1]`
+**Returns:** Array `[start, start+1, ..., stop-1]`, or `[]` if `stop <= start`.
+Errors if the range would exceed 10,000,000 elements.
 
 **Example:**
 
@@ -433,6 +446,10 @@ for i in range(5) {
 numbers = range(3)
 print numbers
 # Output: [0, 1, 2]
+
+numbers = range(1, 5)
+print numbers
+# Output: [1, 2, 3, 4]
 ```
 
 ### append(array, value)

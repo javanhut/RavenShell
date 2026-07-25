@@ -766,3 +766,17 @@ func testPath(t *testing.T, exp ast.Expression, expectedValue string) {
 		t.Errorf("path.Value not %s. got=%s", expectedValue, path.Value)
 	}
 }
+
+// A newline ends a statement, so an operator-led line is its own statement
+// rather than an infix continuation of the previous one: `print 10 - 4` followed
+// by `/bin/echo hi` used to parse as `4 / bin` and fail with "unknown operator".
+func TestOperatorLedLineStartsNewStatement(t *testing.T) {
+	for _, in := range []string{"print 10 - 4\n/bin/echo hi", "x = 2\n/usr/bin/true"} {
+		l := lexer.NewLexer(in)
+		p := New(l)
+		program := p.ParseProgram()
+		if n := len(program.Statements); n != 2 {
+			t.Errorf("%q parsed into %d statements, want 2", in, n)
+		}
+	}
+}

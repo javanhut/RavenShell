@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // names builds n entries named e00, e01, ... for layout tests.
@@ -25,33 +26,44 @@ func gridLines(s string) []string {
 	return strings.Split(s, "\n")
 }
 
-// TestFormatColumnsColumnMajor verifies entries fill top-to-bottom, 10 per
-// column, with extra columns appended (25 -> columns of 10, 10, 5).
+// TestFormatColumnsFitsWidth is the property that matters: no line is wider
+// than the terminal, so nothing wraps and the columns stay aligned.
+func TestFormatColumnsFitsWidth(t *testing.T) {
+	names := []string{
+		".DS_Store", "Ivaldi/", "NoSuchMerge/", "RavenShellTest/", "TestDirectoryOC/",
+		"TheRoom/", ".claude/", "IvaldiTest/", "NvCrow/", "RavenTerminal/", "TestHtmx/",
+		"concurrency-plan.md", "AWSTUI/", "LocalAgent/", "OllamaTUI/", "ReactVIsland/",
+		"TheCarrionLanguage/",
+	}
+	for _, width := range []int{20, 40, 80, 120} {
+		out := formatColumns(names, names, width)
+		for _, ln := range gridLines(out) {
+			if w := utf8.RuneCountInString(strings.TrimRight(ln, " ")); w > width {
+				t.Errorf("width=%d: line %q is %d wide", width, ln, w)
+			}
+		}
+	}
+}
+
+// TestFormatColumnsColumnMajor verifies entries fill top-to-bottom and that a
+// wider terminal packs them into more columns.
 func TestFormatColumnsColumnMajor(t *testing.T) {
-	names := seqNames(25)
-	out := formatColumns(names, names, 10)
+	names := seqNames(25) // each entry is 3 wide, so 5 per column at width 25
+	out := formatColumns(names, names, 25)
 	lines := gridLines(out)
 
-	if len(lines) != 10 {
-		t.Fatalf("expected 10 rows, got %d:\n%s", len(lines), out)
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 rows, got %d:\n%s", len(lines), out)
 	}
 
 	// Reconstruct reading column-major (down each column, then across); it must
 	// equal the original order.
+	var got []string
 	rows := make([][]string, len(lines))
-	maxCols := 0
 	for i, ln := range lines {
 		rows[i] = strings.Fields(ln)
-		if len(rows[i]) > maxCols {
-			maxCols = len(rows[i])
-		}
 	}
-	if maxCols != 3 {
-		t.Fatalf("expected 3 columns for 25 entries, got %d:\n%s", maxCols, out)
-	}
-
-	var got []string
-	for c := 0; c < maxCols; c++ {
+	for c := 0; c < len(rows[0]); c++ {
 		for r := range rows {
 			if c < len(rows[r]) {
 				got = append(got, rows[r][c])
@@ -62,50 +74,40 @@ func TestFormatColumnsColumnMajor(t *testing.T) {
 		t.Errorf("column-major order mismatch.\n got: %v\nwant: %v", got, names)
 	}
 
-	// Row 0 should be entries 0, 10, 20.
-	if r0 := strings.Fields(lines[0]); r0[0] != "e00" || r0[1] != "e10" || r0[2] != "e20" {
-		t.Errorf("row 0 = %v, want [e00 e10 e20]", r0)
+	// Row 0 should be entries 0, 5, 10, 15, 20.
+	if r0 := strings.Fields(lines[0]); strings.Join(r0, ",") != "e00,e05,e10,e15,e20" {
+		t.Errorf("row 0 = %v, want [e00 e05 e10 e15 e20]", r0)
 	}
 }
 
-// TestFormatColumnsSingleColumn checks that <= perCol entries form one column,
-// one entry per line.
-func TestFormatColumnsSingleColumn(t *testing.T) {
-	for _, n := range []int{1, 5, 10} {
-		names := seqNames(n)
-		lines := gridLines(formatColumns(names, names, 10))
-		if len(lines) != n {
-			t.Errorf("n=%d: expected %d lines, got %d", n, n, len(lines))
-		}
-		for i, ln := range lines {
-			if strings.TrimSpace(ln) != names[i] {
-				t.Errorf("n=%d line %d = %q, want %q", n, i, ln, names[i])
-			}
+// TestFormatColumnsNarrow checks that a terminal too narrow for two columns
+// falls back to one entry per line.
+func TestFormatColumnsNarrow(t *testing.T) {
+	names := seqNames(6)
+	lines := gridLines(formatColumns(names, names, 6))
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 lines, got %d", len(lines))
+	}
+	for i, ln := range lines {
+		if strings.TrimSpace(ln) != names[i] {
+			t.Errorf("line %d = %q, want %q", i, ln, names[i])
 		}
 	}
 }
 
-// TestFormatColumnsEleven checks the first overflow into a second column.
-func TestFormatColumnsEleven(t *testing.T) {
-	names := seqNames(11)
+// TestFormatColumnsOverlongEntry checks that an entry wider than the terminal
+// does not hang or drop entries.
+func TestFormatColumnsOverlongEntry(t *testing.T) {
+	names := []string{strings.Repeat("x", 50), "a", "b"}
 	lines := gridLines(formatColumns(names, names, 10))
-	if len(lines) != 10 {
-		t.Fatalf("expected 10 rows, got %d", len(lines))
-	}
-	// Row 0 holds e00 and e10; rows 1..9 hold a single entry each.
-	if r0 := strings.Fields(lines[0]); len(r0) != 2 || r0[0] != "e00" || r0[1] != "e10" {
-		t.Errorf("row 0 = %v, want [e00 e10]", r0)
-	}
-	for i := 1; i < 10; i++ {
-		if f := strings.Fields(lines[i]); len(f) != 1 {
-			t.Errorf("row %d = %v, want a single entry", i, f)
-		}
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d: %q", len(lines), lines)
 	}
 }
 
 // TestFormatColumnsEmpty checks the empty directory case.
 func TestFormatColumnsEmpty(t *testing.T) {
-	if got := formatColumns(nil, nil, 10); got != "" {
+	if got := formatColumns(nil, nil, 80); got != "" {
 		t.Errorf("empty listing = %q, want \"\"", got)
 	}
 }
@@ -120,8 +122,8 @@ func TestFormatColumnsColorDoesNotAffectLayout(t *testing.T) {
 		colored[i] = "\033[1;34m" + n + "\033[0m" // pretend everything is a colored dir
 	}
 
-	plainLayout := formatColumns(names, names, 10)
-	colorLayout := stripANSI(formatColumns(names, colored, 10))
+	plainLayout := formatColumns(names, names, 40)
+	colorLayout := stripANSI(formatColumns(names, colored, 40))
 
 	if plainLayout != colorLayout {
 		t.Errorf("color changed the visible layout:\nplain:\n%q\ncolor(stripped):\n%q",

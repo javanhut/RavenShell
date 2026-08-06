@@ -1174,10 +1174,14 @@ func hasFlag(flags map[string]bool, names ...string) bool {
 	return false
 }
 
-// lsRowsPerColumn is how many entries fill one column of `ls` output before the
-// next column begins. Columns are added as needed (10, then 20, then 30, ...),
-// so a directory with 25 entries lists as columns of 10, 10, and 5.
-const lsRowsPerColumn = 10
+// termWidth is the usable width of the terminal, or 80 when it cannot be
+// determined (not a terminal, redirected output).
+func termWidth() int {
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+		return w
+	}
+	return 80
+}
 
 func (e *Evaluator) execList(args []string) (string, error) {
 	operands := stripFlags(args)
@@ -1225,7 +1229,7 @@ func (e *Evaluator) execList(args []string) (string, error) {
 	// output is piped or captured (not a terminal), keep one entry per line so
 	// downstream tools and $(ls) can parse it.
 	if color {
-		fmt.Fprint(e.stdout, formatColumns(names, display, lsRowsPerColumn))
+		fmt.Fprint(e.stdout, formatColumns(names, display, termWidth()))
 	} else {
 		for _, d := range display {
 			fmt.Fprintln(e.stdout, d)
@@ -1234,48 +1238,62 @@ func (e *Evaluator) execList(args []string) (string, error) {
 	return plain.String(), nil
 }
 
-// formatColumns arranges entries into columns filled top-to-bottom, with
-// perCol entries per column (the last column may hold fewer). names holds the
-// visible text used for width/alignment; display holds the matching (possibly
-// colored) text that is actually written. Columns are sized to their widest
-// member and separated by two spaces.
-func formatColumns(names, display []string, perCol int) string {
+// formatColumns arranges entries into columns filled top-to-bottom, using as
+// many columns as fit in width. names holds the visible text used for
+// width/alignment; display holds the matching (possibly colored) text that is
+// actually written. Each column is sized to its widest member and separated by
+// two spaces; no line exceeds width.
+func formatColumns(names, display []string, width int) string {
 	n := len(names)
 	if n == 0 {
 		return ""
 	}
+	const gap = 2
 
-	numCols := (n + perCol - 1) / perCol
-	rows := perCol
-	if numCols == 1 {
-		rows = n
-	}
-
-	// Width of each column = widest visible name it contains.
-	colWidth := make([]int, numCols)
-	for c := range numCols {
-		for r := range perCol {
-			idx := c*perCol + r
-			if idx >= n {
-				break
+	// Widths of the columns for a given row count, or nil if the layout is too
+	// wide to fit.
+	widths := func(rows int) []int {
+		var cols []int
+		total := 0
+		for start := 0; start < n; start += rows {
+			w := 0
+			for _, name := range names[start:min(start+rows, n)] {
+				if l := utf8.RuneCountInString(name); l > w {
+					w = l
+				}
 			}
-			if w := utf8.RuneCountInString(names[idx]); w > colWidth[c] {
-				colWidth[c] = w
+			cols = append(cols, w)
+			total += w + gap
+			if total-gap > width {
+				return nil
 			}
 		}
+		return cols
 	}
 
-	const gap = 2
+	// Fewest rows (widest layout) that still fits. Every entry occupies at least
+	// one column plus the gap, so no fitting layout has fewer rows than this.
+	rows := max(1, (n*(1+gap)+width+gap-1)/(width+gap))
+	colWidth := widths(rows)
+	for colWidth == nil && rows < n {
+		rows++
+		colWidth = widths(rows)
+	}
+	if colWidth == nil {
+		// A single entry is wider than the terminal; one per line and let it wrap.
+		rows, colWidth = n, []int{0}
+	}
+
 	var out bytes.Buffer
-	for r := 0; r < rows; r++ {
-		for c := range numCols {
-			idx := c*perCol + r
+	for r := range rows {
+		for c := range colWidth {
+			idx := c*rows + r
 			if idx >= n {
 				continue
 			}
 			out.WriteString(display[idx])
 			// Pad to the column width + gap, unless nothing follows on this row.
-			if next := (c+1)*perCol + r; next < n {
+			if next := (c+1)*rows + r; next < n {
 				out.WriteString(strings.Repeat(" ", colWidth[c]-utf8.RuneCountInString(names[idx])+gap))
 			}
 		}

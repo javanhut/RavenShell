@@ -20,7 +20,7 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 - **Interruptible** - `Ctrl-C` stops a running command or loop without killing the shell; `Ctrl-R` searches history
 - **Process Management** - `ps`, `kill`, `killall`, background jobs (`&`), and `jobs`
 - **Built-in Helpers** - String/collection functions: `len`, `split`, `join`, `contains`, `upper`, `lower`, `trim`, `replace`, `glob`
-- **Environment & Substitution** - `export`/`env`, `$(command)` substitution, and `$VAR` interpolation in double quotes
+- **Environment & Substitution** - `export NAME=value` (or `export NAME value`), `env`, `$(command)` substitution, and `$VAR` interpolation in double quotes
 - **Built-in Commands** - File system operations (ls, cd, mkdir, rm, etc.)
 - **Human-Readable Aliases** - Natural-language names for common actions: `whereami`/`wai` (cwd), `read`/`view` (show a file), `remove`/`delete` (rm), `makefile`/`newfile`/`touch` (mkfile), `makedir` (mkdir)
 - **Built-in Help** - `raven-help` lists every built-in; `raven-help <command>` shows usage and aliases
@@ -163,7 +163,7 @@ print upper("ravenshell")
 print contains(parts, "b")
 
 # Environment variables, interpolation, and command substitution
-export PROJECT RavenShell
+export PROJECT=RavenShell        # or: export PROJECT RavenShell
 print "project is $PROJECT"      # $VAR expands inside double quotes
 here = $(cwd)
 print here

@@ -488,7 +488,9 @@ print $HOME                 # Print home directory
 print $USER                 # Print username
 cd $HOME                    # Change to home directory
 
-export EDITOR vim           # Set a variable
+export EDITOR=vim           # Set a variable
+export MODELS=~/.ollama     # ~ expands to the home directory
+export GREETING hello world # Word form: value is the rest of the line
 print $EDITOR               # vim
 env                         # List the environment
 ```

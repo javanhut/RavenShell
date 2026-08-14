@@ -327,7 +327,7 @@ python --version
 print "one two three four" | wc -w   # 4
 
 # Environment variables
-export PROJECT RavenShell
+export PROJECT=RavenShell
 print "Project: " + $PROJECT
 ```
 

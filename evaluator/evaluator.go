@@ -1566,6 +1566,21 @@ func (e *Evaluator) execExport(args []string) (string, error) {
 	}
 	name := args[0]
 	value := strings.Join(args[1:], " ")
+	// `export NAME=value` (the POSIX form) as well as `export NAME value...`.
+	if before, after, ok := strings.Cut(name, "="); ok {
+		name = before
+		// ponytail: a leading ~ in the value expands even when it was quoted
+		// ("~/x"); the quoting is already lost by the time the word gets here.
+		after = e.expandHome(after)
+		if value == "" {
+			value = after
+		} else {
+			value = after + " " + value
+		}
+	}
+	if name == "" {
+		return "", fmt.Errorf("export: missing variable name")
+	}
 	e.env[name] = value
 	return "", nil
 }

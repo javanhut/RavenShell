@@ -37,7 +37,7 @@ var helpEntries = []helpEntry{
 	{name: "clear", usage: "clear", summary: "Clear the terminal screen.", group: "Output"},
 
 	{name: "whoami", usage: "whoami", summary: "Print the current user name.", group: "Environment"},
-	{name: "export", usage: "export NAME [value...]", summary: "Set a shell environment variable.", group: "Environment"},
+	{name: "export", usage: "export NAME=value | export NAME [value...]", summary: "Set a shell environment variable.", group: "Environment"},
 	{name: "env", usage: "env", summary: "Print the effective environment, sorted by name.", group: "Environment"},
 	{name: "raven-add", usage: "raven-add path [dir]", summary: "Register an extra executable search directory, or list them.", group: "Environment"},
 

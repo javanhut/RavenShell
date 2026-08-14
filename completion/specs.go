@@ -278,8 +278,9 @@ func builtinSpecs(e *Engine) map[string]*Spec {
 		"cd":    {Args: &ArgSpec{DirsOnly: true}},
 		"tldr":  {Args: &ArgSpec{Generate: tldrPages, NoFiles: true}},
 		"rmdir": {Flags: []Candidate{{Text: "-f", Desc: "Remove non-empty directories"}, {Text: "--force", Desc: "Remove non-empty directories"}}, Args: &ArgSpec{DirsOnly: true}},
-		"raven-add": {Args: &ArgSpec{Static: []Candidate{
-			{Text: "path", Desc: "Register an extra executable search directory"}}}},
+		"raven-add": {Subcommands: []SubSpec{
+			{Name: "path", Desc: "Register an extra executable search directory",
+				Args: &ArgSpec{DirsOnly: true}}}},
 		"raven-completions": {
 			Flags: []Candidate{{Text: "--deep", Desc: "With update: scrape --help for subcommands too"}},
 			Args: &ArgSpec{Static: []Candidate{

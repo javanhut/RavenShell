@@ -264,6 +264,25 @@ func TestExportAndExpand(t *testing.T) {
 	}
 }
 
+// export NAME=value: the POSIX form, with ~ expanded in the value. An
+// assignment-shaped word must reach the command as an argument rather than
+// being split off into its own assignment statement.
+func TestExportAssignmentForm(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	e, out := run(t, "export P=~/bin\nprint $P")
+	if got, want := e.env["P"], filepath.Join(home, "bin"); got != want {
+		t.Errorf("env P = %q, want %q", got, want)
+	}
+	if strings.TrimSpace(out) != filepath.Join(home, "bin") {
+		t.Errorf("output = %q, want %q", out, filepath.Join(home, "bin"))
+	}
+
+	// Other commands keep NAME=value words as plain arguments.
+	if _, out := run(t, "print A=1 B=2"); strings.TrimSpace(out) != "A=1 B=2" {
+		t.Errorf("output = %q, want %q", out, "A=1 B=2")
+	}
+}
+
 func TestCommandSubstitution(t *testing.T) {
 	// Capture a built-in's output into a variable.
 	e, _ := run(t, `s = $(print "captured")`)

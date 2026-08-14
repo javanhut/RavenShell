@@ -350,19 +350,24 @@ When used alone, prints the home directory path.
 
 ### export - Set Environment Variable
 
-Sets a shell environment variable. The value is the remaining arguments joined
-by spaces. Exported variables are visible via `$NAME` and are passed to external
-commands.
+Sets a shell environment variable, in either the POSIX `NAME=value` form or as
+separate words (the value is then the remaining arguments joined by spaces).
+Exported variables are visible via `$NAME` and are passed to external commands.
+A leading `~` in the value expands to the home directory.
 
 **Syntax:**
 ```
+export NAME=value
 export NAME [value...]
 ```
 
 **Examples:**
 ```rsh
-export EDITOR vim
+export EDITOR=vim
 print $EDITOR               # vim
+
+export MODELS=~/.ollama/models
+print $MODELS               # /Users/you/.ollama/models
 
 export GREETING hello world
 print $GREETING             # hello world

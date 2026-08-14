@@ -399,11 +399,6 @@ func (p *Parser) parseArguments(arith bool) []ast.Expression {
 		if p.peekToken.PrecededByNewline {
 			break
 		}
-		// Stop if we see IDENT followed by ASSIGN - that's a new statement.
-		if p.peekTokenIs(token.IDENT) && p.isNextAssignment() {
-			break
-		}
-
 		p.nextToken()
 		arg := p.parseArgument()
 		if arith {
@@ -713,26 +708,6 @@ func (p *Parser) parseCommand(cmdTokenType token.TokenType) ast.Expression {
 	cmd.Arguments = p.parseArguments(cmdTokenType == token.PRINT || cmdTokenType == token.OUTPUT)
 
 	return cmd
-}
-
-// isNextAssignment checks if peek token is IDENT and the token after that is ASSIGN
-func (p *Parser) isNextAssignment() bool {
-	// We need to look two tokens ahead: peek is IDENT, and the one after is ASSIGN
-	// Save current state
-	savedPos := p.l.GetPos()
-	savedCur := p.curToken
-	savedPeek := p.peekToken
-
-	// Advance to check
-	p.nextToken() // now curToken is the IDENT
-	isAssign := p.peekTokenIs(token.ASSIGN)
-
-	// Restore state
-	p.l.SetPos(savedPos)
-	p.curToken = savedCur
-	p.peekToken = savedPeek
-
-	return isAssign
 }
 
 // isPathContinuation reports whether tok can extend a path it is glued to with

@@ -52,6 +52,22 @@ func TestCompleteCommandNames(t *testing.T) {
 	}
 }
 
+// raven-add takes only "path", then a directory: no file noise at either spot.
+func TestRavenAddCompletion(t *testing.T) {
+	dir := t.TempDir()
+	os.Mkdir(filepath.Join(dir, "bin"), 0o755)
+	os.WriteFile(filepath.Join(dir, "note.txt"), nil, 0o644)
+	e := newTestEngine(dir)
+
+	if got := texts(e.Complete("raven-add ", 10)); len(got) != 1 || got[0] != "path" {
+		t.Errorf("Complete(raven-add ) = %v, want [path]", got)
+	}
+	got := texts(e.Complete("raven-add path ", 15))
+	if len(got) != 1 || !strings.HasPrefix(got[0], "bin") {
+		t.Errorf("Complete(raven-add path ) = %v, want [bin/]", got)
+	}
+}
+
 func TestGitSubcommandCompletion(t *testing.T) {
 	e := newTestEngine(t.TempDir())
 

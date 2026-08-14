@@ -159,13 +159,17 @@ print $USER     # Prints username
 path = $HOME + "/documents"
 ```
 
-Set a shell environment variable with `export` (the value is the remaining
-arguments joined by spaces). Exported variables are visible to `$NAME` and are
-passed to external commands:
+Set a shell environment variable with `export`, either as `NAME=value` or as
+separate words (the value is then the remaining arguments joined by spaces). A
+leading `~` in the value expands to the home directory. Exported variables are
+visible to `$NAME` and are passed to external commands:
 
 ```rsh
-export EDITOR vim
+export EDITOR=vim
 print $EDITOR           # vim
+
+export MODELS=~/.ollama/models
+print $MODELS           # /Users/you/.ollama/models
 
 export GREETING hello world
 print $GREETING         # hello world

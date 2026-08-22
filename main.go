@@ -180,10 +180,17 @@ func runSource(eval *evaluator.Evaluator, source, label string) sourceResult {
 // inputIncomplete reports whether src is an incomplete command that the REPL
 // should keep reading continuation lines for. Input is incomplete when it has
 // unbalanced brackets, an unterminated string, a trailing line-continuation
-// backslash, or a trailing binary operator (a pipe `|`/`||` or logical `&&`)
-// that still needs a right-hand side. A single trailing `&` is the background
-// operator and is treated as complete.
+// backslash, an open heredoc whose delimiter line has not arrived, or a
+// trailing binary operator (a pipe `|`/`||` or logical `&&`) that still needs a
+// right-hand side. A single trailing `&` is the background operator and is
+// treated as complete.
 func inputIncomplete(src string) bool {
+	// The lexer already knows the quoting rules, so let it decide whether a
+	// heredoc is still open rather than re-deriving that here.
+	if lexer.NewLexer(src).UnterminatedHeredoc() {
+		return true
+	}
+
 	depth := 0
 	var inString byte // 0, '\'' or '"'
 	triple := false

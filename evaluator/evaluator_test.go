@@ -262,6 +262,118 @@ func TestExportAndExpand(t *testing.T) {
 	if e2.env["X"] != "foo" {
 		t.Errorf("env X = %q, want foo", e2.env["X"])
 	}
+
+	// bash's `export NAME=value` spelling sets the same variable.
+	e3, _ := run(t, `export TOOL=raven`)
+	if got := e3.env["TOOL"]; got != "raven" {
+		t.Errorf("env TOOL = %q, want %q", got, "raven")
+	}
+}
+
+// `FOO=bar cmd` sets FOO for that command only. Leaking it into the shell
+// afterwards would silently change the environment of everything that follows.
+func TestEnvPrefixDoesNotPersist(t *testing.T) {
+	e, out := run(t, "V=temp print \"during=[$V]\"\nprint \"after=[$V]\"")
+	if want := "during=[temp]\nafter=[]\n"; out != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+	if _, ok := e.env["V"]; ok {
+		t.Errorf("env V = %q, want it removed after the command", e.env["V"])
+	}
+}
+
+// A name the prefix shadowed must come back exactly as it was, which means
+// telling "was unset" apart from "was set to empty".
+func TestEnvPrefixRestoresPriorValue(t *testing.T) {
+	e, out := run(t, "export V orig\nV=temp print \"during=[$V]\"\nprint \"after=[$V]\"")
+	if want := "during=[temp]\nafter=[orig]\n"; out != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+	if e.env["V"] != "orig" {
+		t.Errorf("env V = %q, want orig", e.env["V"])
+	}
+}
+
+func TestEnvPrefixStacksAndBarePersists(t *testing.T) {
+	_, out := run(t, "A=1 B=2 print \"[$A][$B]\"")
+	if want := "[1][2]\n"; out != want {
+		t.Errorf("stacked prefixes = %q, want %q", out, want)
+	}
+
+	// With no command on the line it is an ordinary assignment and stays.
+	e, out := run(t, "FOO=bar\nprint \"[$FOO]\"")
+	if want := "[bar]\n"; out != want {
+		t.Errorf("bare assignment = %q, want %q", out, want)
+	}
+	if e.env["FOO"] != "bar" {
+		t.Errorf("env FOO = %q, want bar", e.env["FOO"])
+	}
+}
+
+// A '~' just after '=' names the home directory, so a NAME= prefix does not
+// change what the path means.
+func TestTildeExpandsAfterEquals(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	cases := []struct {
+		src  string
+		want string
+		note string
+	}{
+		{`print FOO=~/x`, "FOO=" + filepath.Join(home, "x") + "\n", "after an assignment prefix"},
+		{`print FOO=~`, "FOO=" + home + "\n", "bare tilde after '='"},
+		{`print ~/x`, filepath.Join(home, "x") + "\n", "leading tilde still expands"},
+		{`print a~b`, "a~b\n", "interior tilde stays literal"},
+		{`print FOO=a=~/b`, "FOO=a=~/b\n", "only the first '=' introduces one"},
+	}
+	for _, c := range cases {
+		t.Run(c.note, func(t *testing.T) {
+			if _, out := run(t, c.src); out != c.want {
+				t.Errorf("output = %q, want %q", out, c.want)
+			}
+		})
+	}
+}
+
+// The glued spelling takes the value from the text after the first '=' and
+// nothing else. Joining the following words in, or trimming the result, would
+// quietly corrupt values that a caller wrote deliberately.
+func TestExportGluedPairs(t *testing.T) {
+	cases := []struct {
+		src  string
+		want map[string]string
+		note string
+	}{
+		{`export A=1 B=2`, map[string]string{"A": "1", "B": "2"}, "several pairs at once"},
+		{`export A=1 B=2 C=3`, map[string]string{"A": "1", "B": "2", "C": "3"}, "three pairs"},
+		{`export P=" padded "`, map[string]string{"P": " padded "}, "significant whitespace survives"},
+		{`export E=`, map[string]string{"E": ""}, "explicitly empty"},
+		{`export E= A=1`, map[string]string{"E": "", "A": "1"}, "empty value is not filled from the next word"},
+		{`export U=a=b=c`, map[string]string{"U": "a=b=c"}, "only the first '=' splits"},
+		// The native spelling is unaffected: there the value is the rest of the line.
+		{`export G hello world`, map[string]string{"G": "hello world"}, "native spelling still joins"},
+	}
+	for _, c := range cases {
+		t.Run(c.note, func(t *testing.T) {
+			e, _ := run(t, c.src)
+			for name, want := range c.want {
+				if got := e.env[name]; got != want {
+					t.Errorf("env %s = %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestGluedEqualsArgumentReachesCommand(t *testing.T) {
+	// A glued KEY=value is one argument word, so it neither disappears into an
+	// assignment nor splits the rest of the line into its own command.
+	_, out := run(t, "print a FOO=bar b")
+	if strings.TrimSpace(out) != "a FOO=bar b" {
+		t.Errorf("output = %q, want %q", out, "a FOO=bar b")
+	}
 }
 
 func TestCommandSubstitution(t *testing.T) {

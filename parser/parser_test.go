@@ -300,6 +300,33 @@ func TestRedirectionInput(t *testing.T) {
 	}
 }
 
+// A bare '>' is only a comparison when its left side is not already a command,
+// so a second one has to stack onto the first redirection instead of comparing
+// it. The chain nests with the last redirection outermost.
+func TestStackedRedirectionNests(t *testing.T) {
+	input := "ls > a.txt > b.txt"
+	l := lexer.NewLexer(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	stmt := program.Statements[0].(*ast.ExpressionStatement)
+	outer, ok := stmt.Expression.(*ast.RedirectionExpression)
+	if !ok {
+		t.Fatalf("stmt.Expression is not ast.RedirectionExpression. got=%T",
+			stmt.Expression)
+	}
+	testPath(t, outer.Target, "b.txt")
+
+	inner, ok := outer.Command.(*ast.RedirectionExpression)
+	if !ok {
+		t.Fatalf("outer.Command is not ast.RedirectionExpression. got=%T",
+			outer.Command)
+	}
+	testPath(t, inner.Target, "a.txt")
+	testCommand(t, inner.Command, ast.CMD_LIST)
+}
+
 func TestRedirectionHeredoc(t *testing.T) {
 	input := "print << EOF"
 	l := lexer.NewLexer(input)
@@ -321,6 +348,117 @@ func TestRedirectionHeredoc(t *testing.T) {
 
 	testCommand(t, redir.Command, ast.CMD_PRINT)
 	testIdentifier(t, redir.Target, "EOF")
+}
+
+// The body the lexer collected has to reach the redirection node, along with
+// whether the delimiter was quoted, since that decides expansion at eval time.
+func TestRedirectionHeredocBody(t *testing.T) {
+	cases := []struct {
+		input      string
+		wantBody   string
+		wantQuoted bool
+		wantDelim  string
+		note       string
+	}{
+		{"print <<EOF\nhello\nEOF\n", "hello\n", false, "EOF", "unquoted delimiter"},
+		{"print <<'EOF'\nhello\nEOF\n", "hello\n", true, "EOF", "single-quoted delimiter"},
+		{"print <<\\EOF\nhello\nEOF\n", "hello\n", true, "EOF", "backslash-quoted delimiter"},
+		{"print <<-EOF\n\thello\n\tEOF\n", "hello\n", false, "EOF", "tab-stripping form"},
+	}
+
+	for _, c := range cases {
+		p := New(lexer.NewLexer(c.input))
+		program := p.ParseProgram()
+		checkParserErrors(t, p)
+
+		stmt := program.Statements[0].(*ast.ExpressionStatement)
+		redir, ok := stmt.Expression.(*ast.RedirectionExpression)
+		if !ok {
+			t.Fatalf("%s: stmt.Expression is not ast.RedirectionExpression. got=%T", c.note, stmt.Expression)
+		}
+		if redir.Type != ast.REDIR_HEREDOC {
+			t.Errorf("%s: type = %s, want %s", c.note, redir.Type, ast.REDIR_HEREDOC)
+		}
+		if redir.HeredocBody != c.wantBody {
+			t.Errorf("%s: body = %q, want %q", c.note, redir.HeredocBody, c.wantBody)
+		}
+		if redir.HeredocQuoted != c.wantQuoted {
+			t.Errorf("%s: quoted = %v, want %v", c.note, redir.HeredocQuoted, c.wantQuoted)
+		}
+		testIdentifier(t, redir.Target, c.wantDelim)
+	}
+}
+
+// Statements after a heredoc body must still parse: the body is skipped, not
+// consumed as source.
+func TestHeredocDoesNotSwallowFollowingStatements(t *testing.T) {
+	p := New(lexer.NewLexer("print <<EOF\nbody\nEOF\nprint \"after\"\n"))
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 2 {
+		t.Fatalf("parsed %d statements, want 2", len(program.Statements))
+	}
+}
+
+// A glued NAME=value at the start of a line is a command prefix, not one of
+// RavenShell's own assignments. Reading the value as an argument word is what
+// keeps `FOO=bar /bin/sh -c x` from parsing `bar / bin/sh` as a division.
+func TestEnvPrefixStatement(t *testing.T) {
+	cases := []struct {
+		input       string
+		wantAssigns []string // "name=value"
+		wantCommand string   // "" when the line is only assignments
+		note        string
+	}{
+		{`FOO=bar print hi`, []string{"FOO=bar"}, "print hi", "prefix on a builtin"},
+		{`FOO=bar /bin/sh -c "x"`, []string{"FOO=bar"}, `/bin/sh -c "x"`, "prefix on a path command"},
+		{`A=1 B=2 print hi`, []string{"A=1", "B=2"}, "print hi", "stacked prefixes"},
+		{`FOO= print hi`, []string{`FOO=""`}, "print hi", "explicitly empty value"},
+		{`FOO=bar`, []string{"FOO=bar"}, "", "bare assignment, no command"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.note, func(t *testing.T) {
+			p := New(lexer.NewLexer(c.input))
+			program := p.ParseProgram()
+			checkParserErrors(t, p)
+
+			if len(program.Statements) != 1 {
+				t.Fatalf("parsed %d statements, want 1: %s", len(program.Statements), program.String())
+			}
+			stmt, ok := program.Statements[0].(*ast.EnvPrefixStatement)
+			if !ok {
+				t.Fatalf("statement is %T, want *ast.EnvPrefixStatement", program.Statements[0])
+			}
+			if len(stmt.Assignments) != len(c.wantAssigns) {
+				t.Fatalf("got %d assignments, want %d", len(stmt.Assignments), len(c.wantAssigns))
+			}
+			for i, want := range c.wantAssigns {
+				if got := stmt.Assignments[i].Name + "=" + stmt.Assignments[i].Value.String(); got != want {
+					t.Errorf("assignment %d = %q, want %q", i, got, want)
+				}
+			}
+			if c.wantCommand == "" {
+				if stmt.Command != nil {
+					t.Errorf("command = %q, want none", stmt.Command.String())
+				}
+			} else if stmt.Command == nil {
+				t.Errorf("command = none, want %q", c.wantCommand)
+			}
+		})
+	}
+}
+
+// The spaced form stays RavenShell's own assignment statement.
+func TestSpacedAssignmentIsNotAnEnvPrefix(t *testing.T) {
+	p := New(lexer.NewLexer("x = 5"))
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if _, ok := program.Statements[0].(*ast.AssignmentStatement); !ok {
+		t.Fatalf("statement is %T, want *ast.AssignmentStatement", program.Statements[0])
+	}
 }
 
 func TestVariableReference(t *testing.T) {
@@ -653,6 +791,27 @@ func TestNewlineSeparatesCommands(t *testing.T) {
 	cmd := program.Statements[1].(*ast.ExpressionStatement).Expression.(*ast.Command)
 	if cmd.Type != ast.CMD_EXTERNAL || cmd.Name != "git" {
 		t.Errorf("second statement = {%s %s}, want external git", cmd.Type, cmd.Name)
+	}
+}
+
+func TestSpacedAssignmentStillEndsArguments(t *testing.T) {
+	// Only the spaced form assigns, and it still ends the argument list on the
+	// same line: `print hi x = 5` is a command plus an assignment, not four words.
+	input := "print hi x = 5"
+	l := lexer.NewLexer(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 2 {
+		t.Fatalf("got %d statements, want 2", len(program.Statements))
+	}
+	cmd := program.Statements[0].(*ast.ExpressionStatement).Expression.(*ast.Command)
+	if len(cmd.Arguments) != 1 {
+		t.Errorf("wrong arg count. got=%d, want 1 (%s)", len(cmd.Arguments), cmd.String())
+	}
+	if _, ok := program.Statements[1].(*ast.AssignmentStatement); !ok {
+		t.Errorf("second statement = %T, want *ast.AssignmentStatement", program.Statements[1])
 	}
 }
 

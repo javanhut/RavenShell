@@ -355,3 +355,30 @@ func TestLineContinuation(t *testing.T) {
 		t.Errorf("token after line continuation marked PrecededByNewline; it should be spliced onto the same line")
 	}
 }
+
+// TestDashPathSegmentTokens documents why the parser can recover a '-'-leading
+// path segment by appending a single token: the FLAG literal already carries the
+// whole remainder of the path, since '/' does not terminate a flag.
+func TestDashPathSegmentTokens(t *testing.T) {
+	input := `/tmp/a/-b/c`
+	want := []struct {
+		typ token.TokenType
+		lit string
+	}{
+		{token.FSLASH, "/"},
+		{token.IDENT, "tmp"},
+		{token.FSLASH, "/"},
+		{token.IDENT, "a"},
+		{token.FSLASH, "/"},
+		{token.FLAG, "-b/c"},
+		{token.EOF, ""},
+	}
+
+	l := NewLexer(input)
+	for i, w := range want {
+		tok := l.NextToken()
+		if tok.Type != w.typ || tok.Literal != w.lit {
+			t.Fatalf("tests[%d] - got {%q %q}, want {%q %q}", i, tok.Type, tok.Literal, w.typ, w.lit)
+		}
+	}
+}

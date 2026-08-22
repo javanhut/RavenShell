@@ -78,6 +78,12 @@ func TestSinglePathArgument(t *testing.T) {
 		"git@github.com:javanhut/RavenShell.git",
 		"ssh://git@host.example.com/repo.git",
 		"user@host:8080/path",
+
+		// Path segments that begin with '-' (the lexer reads them as FLAG tokens;
+		// glued after a '/' they are ordinary directory names).
+		"/tmp/cache-1000/-home-user/x",
+		"dir/-seg/file.txt",
+		"./-out/log.txt",
 	}
 
 	for _, in := range cases {
@@ -234,6 +240,119 @@ func TestSymbolLeadingWords(t *testing.T) {
 			// and identifiers print bare.
 			if got := argText(args[0]); got != in {
 				t.Errorf("arg value = %q, want %q", got, in)
+			}
+		})
+	}
+}
+
+// TestGluedEqualsWord is the regression guard for the bug where a glued
+// KEY=value argument ended the command and started a new statement, so
+// `printf x a FOO=bar b` ran "b" as its own command. RavenShell assigns with
+// the spaced form (x = 5), so a glued '=' is ordinary word text.
+func TestGluedEqualsWord(t *testing.T) {
+	cases := []string{
+		"FOO=bar",
+		"CGO_ENABLED=0",
+		"FOO=",  // empty value: used to abort with "no prefix parse function for EOF"
+		"a=b=c", // second '=': used to abort with "no prefix parse function for ASSIGN"
+		"FOO=a/b.txt",
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			args := parseArgs(t, in)
+			if len(args) != 1 {
+				t.Fatalf("%q parsed into %d arguments, want 1: %v", in, len(args), argStrings(args))
+			}
+			if got := argText(args[0]); got != in {
+				t.Errorf("arg value = %q, want %q", got, in)
+			}
+		})
+	}
+}
+
+// TestGluedEqualsDoesNotSplitCommand is the reported case: `printf x a FOO=bar b`
+// must stay one command with four arguments instead of ending at FOO=bar and
+// running "b" as a command of its own.
+func TestGluedEqualsDoesNotSplitCommand(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"x a FOO=bar b", []string{"x", "a", "FOO=bar", "b"}},
+		{"FOO=bar", []string{"FOO=bar"}},
+		{"a FOO=bar", []string{"a", "FOO=bar"}},
+		{"FOO=bar BAZ=qux", []string{"FOO=bar", "BAZ=qux"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			args := parseArgs(t, tc.in)
+			if len(args) != len(tc.want) {
+				t.Fatalf("%q parsed into %d arguments, want %d: %v",
+					tc.in, len(args), len(tc.want), argStrings(args))
+			}
+			for i, want := range tc.want {
+				if got := argText(args[i]); got != want {
+					t.Errorf("arg[%d] = %q, want %q", i, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestDashSegmentRedirectionTarget verifies that a path segment beginning with
+// '-' glued straight after a '/' stays part of the redirect target. The lexer
+// hands such a segment over as one FLAG token carrying the whole remainder of
+// the path, so without this the target was truncated at the last slash and the
+// evaluator tried to open a directory.
+func TestDashSegmentRedirectionTarget(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"ls > /tmp/cache-1000/-home-user/x", "/tmp/cache-1000/-home-user/x"},
+		{"ls >> ./-out/log.txt", "./-out/log.txt"},
+		{"print < dir/-seg/input.txt", "dir/-seg/input.txt"},
+		{"ls > ~/-cache/x", "~/-cache/x"},
+		{"ls 2> /var/-log/err.txt", "/var/-log/err.txt"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			l := lexer.NewLexer(tc.in)
+			p := New(l)
+			program := p.ParseProgram()
+			checkParserErrors(t, p)
+			stmt := program.Statements[0].(*ast.ExpressionStatement)
+			redir, ok := stmt.Expression.(*ast.RedirectionExpression)
+			if !ok {
+				t.Fatalf("stmt.Expression is not ast.RedirectionExpression. got=%T", stmt.Expression)
+			}
+			if got := argText(redir.Target); got != tc.want {
+				t.Errorf("target = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFlagStaysFlagBesidePath is the other half of the dash-segment rule: a '-'
+// word separated from its neighbour by whitespace is still a flag, never path
+// text, no matter what sits next to it.
+func TestFlagStaysFlagBesidePath(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"-la /tmp/-a/b", []string{"-la", "/tmp/-a/b"}},
+		{"--color=auto x", []string{"--color=auto", "x"}},
+		{"/tmp/dir -x", []string{"/tmp/dir", "-x"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			args := parseArgs(t, tc.in)
+			if len(args) != len(tc.want) {
+				t.Fatalf("%q parsed into %d arguments, want %d: %v",
+					tc.in, len(args), len(tc.want), argStrings(args))
+			}
+			for i, want := range tc.want {
+				if got := argText(args[i]); got != want {
+					t.Errorf("arg[%d] = %q, want %q", i, got, want)
+				}
 			}
 		})
 	}

@@ -40,8 +40,9 @@ name = "Hello, World!"
 path = 'single quotes work too'
 ```
 
-Triple-quoted strings can span lines, which is the preferred RavenScript
-alternative to shell heredocs:
+Triple-quoted strings can span lines, which is the preferred RavenScript way to
+hold multi-line text in a variable (shell-style `<<` heredocs are also supported
+for feeding text straight to a command):
 
 ```rsh
 message = """Build started
@@ -123,6 +124,10 @@ empty = []string
 
 Variable names must start with a letter and can contain letters, numbers, and underscores.
 
+Assignment is the *spaced* form: the `=` must have whitespace around it. A glued
+`KEY=value` carries no assignment meaning and is an ordinary argument word, so
+`printf x a FOO=bar b` passes `FOO=bar` through to `printf` unchanged.
+
 ### Program exit
 
 `exit()` ends a script or interactive session successfully. Pass an integer
@@ -171,7 +176,41 @@ export GREETING hello world
 print $GREETING         # hello world
 ```
 
+The shell spelling `NAME=value` works too, including several at once:
+
+```rsh
+export EDITOR=vim
+export A=1 B=2
+```
+
 Use `env` to list the effective environment.
+
+### Per-command Environment
+
+A `NAME=value` written in front of a command sets that variable for the command
+only. It does not persist afterwards, which makes it the right way to vary one
+setting for a single run:
+
+```rsh
+DEBUG=1 ./build.sh          # DEBUG is set only while build.sh runs
+print $DEBUG                # empty again
+
+A=1 B=2 make install        # several at once
+```
+
+A `NAME=value` with no command after it is an ordinary assignment and does
+persist. Note that RavenScript's own assignment is the *spaced* form (`x = 5`);
+the glued form is the environment spelling, and a glued `KEY=value` anywhere
+else on the line is just an argument word:
+
+```rsh
+x = 5                       # RavenScript variable
+CGO_ENABLED=0 go build      # environment for one command
+printf "%s\n" FOO=bar       # an ordinary argument
+```
+
+A `~` directly after the `=` expands to your home directory, so
+`GOPATH=~/go` and `GOPATH=/home/you/go` mean the same thing.
 
 ### Command Substitution
 
@@ -262,7 +301,7 @@ From highest to lowest precedence:
 4. `<`, `>`, `<=`, `>=` - Comparison
 5. `==`, `!=` - Equality
 6. `|` - Pipe
-7. `>`, `>>`, `<` - Redirection
+7. `>`, `>>`, `<`, `<<` - Redirection
 
 Use parentheses to override precedence:
 

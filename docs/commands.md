@@ -357,7 +357,13 @@ commands.
 **Syntax:**
 ```
 export NAME [value...]
+export NAME=value
 ```
+
+bash's glued `export NAME=value` spelling is accepted as well, including several
+pairs at once. With the glued form the value is exactly the text after the first
+`=`, so surrounding whitespace is kept; with the `export NAME value...` form the
+remaining words are joined.
 
 **Examples:**
 ```rsh
@@ -366,6 +372,16 @@ print $EDITOR               # vim
 
 export GREETING hello world
 print $GREETING             # hello world
+
+export A=1 B=2              # two variables
+export PADDED=" kept "      # whitespace preserved
+```
+
+To set a variable for one command only, write it in front of that command
+instead — see [Per-command Environment](language-reference.md#per-command-environment):
+
+```rsh
+DEBUG=1 ./build.sh          # DEBUG is not set afterwards
 ```
 
 ---
@@ -630,6 +646,14 @@ ls > files.txt
 print "Hello" > greeting.txt
 ```
 
+When the same stream is redirected more than once, the last redirection wins,
+matching bash. The earlier targets are still created and truncated:
+
+```rsh
+print "hi" > a.txt > b.txt   # "hi" lands in b.txt; a.txt is created and empty
+print "hi" > a.txt 2> b.txt  # different streams, so both apply
+```
+
 ---
 
 ### Append Redirection ( >> )
@@ -661,6 +685,60 @@ command < file
 **Example:**
 ```rsh
 print < input.txt
+```
+
+---
+
+### Heredoc ( << )
+
+Feeds a block of inline text to a command as its input. The body runs from the
+line after the operator up to a line containing only the delimiter.
+
+**Syntax:**
+```
+command << DELIMITER
+body
+DELIMITER
+```
+
+**Example:**
+```rsh
+sudo tee /etc/motd << EOF
+Welcome to the machine.
+EOF
+```
+
+An unquoted delimiter expands `$VAR`, `${VAR}`, `$?`, and `$(command)` in the
+body; quoting it any of three ways — `<<'EOF'`, `<<"EOF"`, or `<<\EOF` — passes
+the body through untouched:
+
+```rsh
+export NAME raven
+print <<EOF
+hi $NAME
+EOF
+# hi raven
+
+print <<EOF
+today is $(print monday)
+EOF
+# today is monday
+
+print <<'EOF'
+hi $NAME
+EOF
+# hi $NAME
+```
+
+Use `<<-` to strip leading tabs from the body and the delimiter line, so a
+heredoc inside an indented block stays aligned with the code around it:
+
+```rsh
+if 1 == 1 {
+	print <<-EOF
+	no leading tabs in the output
+	EOF
+}
 ```
 
 ---

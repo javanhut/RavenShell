@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"ravenshell/ansi"
 	"ravenshell/ast"
+	"ravenshell/lexer"
+	"ravenshell/parser"
 	"ravenshell/token"
 	"runtime"
 	"slices"
@@ -324,8 +326,8 @@ func (e *Evaluator) evalStatement(stmt ast.Statement) error {
 func (e *Evaluator) evalStatementRaw(stmt ast.Statement) (err error) {
 	// A bug in the evaluator must not kill the shell. Recover the panic as an
 	// ordinary evaluation error (evalStatement stamps line:column onto it) and
-	// restore the streams a redirection or command substitution was unwound
-	// past, since those swap e.stdout/stderr/stdin back without a defer.
+	// restore the streams a command substitution was unwound past, since it
+	// swaps e.stdout back without a defer.
 	// Control flow (break/continue/return, exit, ^C) travels by error, never by
 	// panic, so nothing here can swallow it.
 	out, errOut, in := e.stdout, e.stderr, e.stdin
@@ -342,6 +344,8 @@ func (e *Evaluator) evalStatementRaw(stmt ast.Statement) (err error) {
 		return err
 	case *ast.AssignmentStatement:
 		return e.evalAssignment(s)
+	case *ast.EnvPrefixStatement:
+		return e.evalEnvPrefix(s)
 	case *ast.ForStatement:
 		return e.evalForStatement(s)
 	case *ast.WhileStatement:
@@ -366,6 +370,8 @@ func statementToken(stmt ast.Statement) token.Token {
 	case *ast.ExpressionStatement:
 		return node.Token
 	case *ast.AssignmentStatement:
+		return node.Token
+	case *ast.EnvPrefixStatement:
 		return node.Token
 	case *ast.ForStatement:
 		return node.Token
@@ -1036,7 +1042,47 @@ func (e *Evaluator) forkForPipeline(stdin io.Reader, stdout io.Writer) *Evaluato
 	}
 }
 
+// evalRedirection runs a command with all of its redirections applied.
+// Redirections nest with the last one outermost — `cmd > a > b` parses as
+// ((cmd > a) > b) — so the chain is flattened back into source order first.
+// Order is what makes a later redirection of a stream replace an earlier one
+// (`cmd > a > b` writes to b) and what decides which stdout `2>&1` copies.
 func (e *Evaluator) evalRedirection(redir *ast.RedirectionExpression) (string, error) {
+	chain := []*ast.RedirectionExpression{redir}
+	command := redir.Command
+	for {
+		inner, ok := command.(*ast.RedirectionExpression)
+		if !ok {
+			break
+		}
+		chain = append(chain, inner)
+		command = inner.Command
+	}
+	slices.Reverse(chain)
+
+	oldOut, oldErr, oldIn := e.stdout, e.stderr, e.stdin
+	defer func() { e.stdout, e.stderr, e.stdin = oldOut, oldErr, oldIn }()
+
+	for _, r := range chain {
+		file, err := e.applyRedirection(r)
+		// The files stay open until the command has run, so a redirection that
+		// fails still closes the ones opened before it.
+		if file != nil {
+			defer file.Close()
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+
+	return e.evalExpression(command)
+}
+
+// applyRedirection points one stream at a single redirection's target, on top of
+// whatever the redirections before it left in place. It returns the file it
+// opened — nil for a heredoc or an fd duplication — for the caller to close once
+// the command has run.
+func (e *Evaluator) applyRedirection(redir *ast.RedirectionExpression) (*os.File, error) {
 	// fd duplication (N>&M): point the source fd's sink at the target fd's
 	// current sink, e.g. 2>&1 makes stderr follow wherever stdout goes. This is
 	// what `cmd 2>&1 | tail` relies on: the pipe has already aimed stdout at its
@@ -1053,23 +1099,32 @@ func (e *Evaluator) evalRedirection(redir *ast.RedirectionExpression) (string, e
 		case 2:
 			dup = e.stderr
 		default:
-			return "", fmt.Errorf("unsupported fd duplication target %d", redir.DupFd)
+			return nil, fmt.Errorf("unsupported fd duplication target %d", redir.DupFd)
 		}
-		oldOut, oldErr := e.stdout, e.stderr
 		if src == 2 {
 			e.stderr = dup
 		} else {
 			e.stdout = dup
 		}
-		result, err := e.evalExpression(redir.Command)
-		e.stdout, e.stderr = oldOut, oldErr
-		return result, err
+		return nil, nil
+	}
+
+	// A heredoc feeds text, not a file: its target is the delimiter word, which
+	// must not be evaluated. An unquoted delimiter (<<EOF) expands $VAR and
+	// $(command) in the body; a quoted one (<<'EOF') passes it through untouched.
+	if redir.Type == ast.REDIR_HEREDOC {
+		body := redir.HeredocBody
+		if !redir.HeredocQuoted {
+			body = e.expandHeredoc(body)
+		}
+		e.stdin = strings.NewReader(body)
+		return nil, nil
 	}
 
 	// Get target filename
 	target, err := e.evalExpression(redir.Target)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Resolve path
@@ -1083,44 +1138,34 @@ func (e *Evaluator) evalRedirection(redir *ast.RedirectionExpression) (string, e
 		}
 		file, err := os.OpenFile(targetPath, flags, 0644)
 		if err != nil {
-			return "", fmt.Errorf("cannot create file %s: %v", target, err)
+			return nil, fmt.Errorf("cannot create file %s: %v", target, err)
 		}
-		defer file.Close()
 
-		// &>file sends both streams to the file; N>file targets the chosen fd
-		// (default stdout); the rest send stdout.
-		oldOut, oldErr := e.stdout, e.stderr
+		// &>file sends both streams to the file; 2>file targets stderr; an
+		// unmarked or 1>file targets stdout. An fd above 2 still creates the
+		// file (bash does too) but nothing in the shell writes to it, so it
+		// must not capture stdout — otherwise `cmd > out 3> other` would send
+		// the output to `other` instead of `out`.
 		if redir.Both {
 			e.stdout, e.stderr = file, file
 		} else if redir.SrcFd == 2 {
 			e.stderr = file
-		} else {
+		} else if redir.SrcFd <= 1 {
 			e.stdout = file
 		}
-		result, err := e.evalExpression(redir.Command)
-		e.stdout, e.stderr = oldOut, oldErr
-		return result, err
+		return file, nil
 
 	case ast.REDIR_INPUT:
 		// Read from file
 		file, err := os.Open(targetPath)
 		if err != nil {
-			return "", fmt.Errorf("cannot open file %s: %v", target, err)
+			return nil, fmt.Errorf("cannot open file %s: %v", target, err)
 		}
-		defer file.Close()
-
-		oldStdin := e.stdin
 		e.stdin = file
-		result, err := e.evalExpression(redir.Command)
-		e.stdin = oldStdin
-		return result, err
-
-	case ast.REDIR_HEREDOC:
-		// For heredoc, target is the delimiter - not implemented yet
-		return "", fmt.Errorf("heredoc not yet implemented")
+		return file, nil
 	}
 
-	return "", nil
+	return nil, nil
 }
 
 // Command implementations
@@ -1546,9 +1591,37 @@ func (e *Evaluator) execExport(args []string) (string, error) {
 	if len(args) == 0 {
 		return "", fmt.Errorf("export: missing variable name")
 	}
+	// bash spells this `export NAME=value` and accepts several pairs at once. A
+	// glued NAME=value is one ordinary word to the parser, so when the first
+	// word carries an '=' every word is read as its own pair. The value is
+	// exactly the text after the first '=' — joining the following words in
+	// would make `export A=1 B=2` set A to "1 B=2", and trimming it would
+	// destroy a deliberately padded value.
+	if strings.ContainsRune(args[0], '=') {
+		for _, arg := range args {
+			name, value, hasValue := strings.Cut(arg, "=")
+			if name == "" {
+				return "", fmt.Errorf("export: missing variable name")
+			}
+			if !hasValue {
+				// A bare name alongside pairs marks an existing value for
+				// export rather than blanking it.
+				if _, ok := e.env[name]; !ok {
+					e.env[name] = e.expandVariable(name)
+				}
+				continue
+			}
+			e.env[name] = value
+		}
+		return "", nil
+	}
+
+	// RavenShell's own spelling: the value is the remaining words joined.
 	name := args[0]
-	value := strings.Join(args[1:], " ")
-	e.env[name] = value
+	if name == "" {
+		return "", fmt.Errorf("export: missing variable name")
+	}
+	e.env[name] = strings.Join(args[1:], " ")
 	return "", nil
 }
 
@@ -1742,6 +1815,14 @@ func (e *Evaluator) expandHome(path string) string {
 		}
 		return filepath.Join(home, path[2:])
 	}
+	// A '~' directly after '=' expands too, so a word like FOO=~/bin names the
+	// same directory whether or not it carries a NAME= prefix. Only the first
+	// '=' introduces one, which leaves later ones (PATH=a=~/b) as plain text.
+	if i := strings.IndexByte(path, '='); i >= 0 {
+		if rest := path[i+1:]; rest == "~" || strings.HasPrefix(rest, "~/") {
+			return path[:i+1] + e.expandHome(rest)
+		}
+	}
 	return path
 }
 
@@ -1841,6 +1922,52 @@ func (e *Evaluator) evalAssignment(stmt *ast.AssignmentStatement) error {
 	}
 	e.setVar(stmt.Name.Value, val)
 	return nil
+}
+
+// evalEnvPrefix runs `FOO=bar cmd`: the assignments are visible to the command
+// (and to anything it starts) but are rolled back afterwards, so they never
+// leak into the shell. With no command they are ordinary assignments and stay.
+func (e *Evaluator) evalEnvPrefix(stmt *ast.EnvPrefixStatement) error {
+	values := make(map[string]string, len(stmt.Assignments))
+	for _, a := range stmt.Assignments {
+		val, err := e.evalExpressionValue(a.Value)
+		if err != nil {
+			return err
+		}
+		values[a.Name] = e.valueToString(val)
+	}
+
+	if stmt.Command == nil {
+		for name, val := range values {
+			e.env[name] = val
+		}
+		return nil
+	}
+
+	// Remember what each name was so the exact prior state comes back, telling
+	// "unset" apart from "set to empty".
+	type saved struct {
+		val string
+		had bool
+	}
+	prior := make(map[string]saved, len(values))
+	for name, val := range values {
+		old, had := e.env[name]
+		prior[name] = saved{val: old, had: had}
+		e.env[name] = val
+	}
+	defer func() {
+		for name, s := range prior {
+			if s.had {
+				e.env[name] = s.val
+			} else {
+				delete(e.env, name)
+			}
+		}
+	}()
+
+	_, err := e.evalExpressionValue(stmt.Command)
+	return err
 }
 
 // evalForStatement handles for loops: for i in range(n) { ... }
@@ -2371,8 +2498,34 @@ func (e *Evaluator) builtinGlob(args []Value) (Value, error) {
 // interpolate expands $VAR, ${VAR}, and $? references inside a double-quoted
 // string. A literal dollar sign is written as $$.
 func (e *Evaluator) interpolate(s string) string {
+	return e.expand(s, false)
+}
+
+// expandHeredoc expands the body of a heredoc whose delimiter is unquoted. A
+// shell runs command substitution on that text as well as variable references,
+// so $(date) in a heredoc must behave the same as $(date) on a command line.
+func (e *Evaluator) expandHeredoc(s string) string {
+	return e.expand(s, true)
+}
+
+// expand is the scanner behind interpolate and expandHeredoc; cmdSub enables
+// $(command) substitution, which double-quoted strings do not perform.
+func (e *Evaluator) expand(s string, cmdSub bool) string {
+	// A substitution cannot close after the final ')', so text with none left
+	// is settled in constant time. Without this, a body carrying many
+	// unbalanced `$(` rescans to the end of the text for every one of them.
+	lastClose := strings.LastIndexByte(s, ')')
+
 	var out strings.Builder
 	for i := 0; i < len(s); i++ {
+		// A backslash escapes a following '$', so `\$VAR` and `\$(cmd)` stay
+		// literal — the same escape bash honours in heredocs and double-quoted
+		// strings.
+		if s[i] == '\\' && i+1 < len(s) && s[i+1] == '$' {
+			out.WriteByte('$')
+			i++
+			continue
+		}
 		if s[i] != '$' || i == len(s)-1 {
 			out.WriteByte(s[i])
 			continue
@@ -2394,6 +2547,25 @@ func (e *Evaluator) interpolate(s string) string {
 			name := s[i+2 : i+2+end]
 			out.WriteString(e.lookupName(name))
 			i += 2 + end
+		case cmdSub && next == '(':
+			// $((...)) is arithmetic expansion, which RavenShell does not
+			// implement. Leave it exactly as written: running it as a command
+			// substitution would silently blank the text, which quietly
+			// corrupts Makefiles and shell scripts written through a heredoc.
+			if i+2 < len(s) && s[i+2] == '(' {
+				out.WriteByte('$')
+				continue
+			}
+			end := -1
+			if i+1 <= lastClose {
+				end = matchCloseParen(s, i+1)
+			}
+			if end < 0 {
+				out.WriteByte('$') // unbalanced - leave literal
+				continue
+			}
+			out.WriteString(e.expandCommandSub(s[i+2 : end]))
+			i = end
 		case isNameStart(next):
 			j := i + 1
 			for j < len(s) && isNameChar(s[j]) {
@@ -2406,6 +2578,62 @@ func (e *Evaluator) interpolate(s string) string {
 		}
 	}
 	return out.String()
+}
+
+// matchCloseParen returns the index of the ')' that closes the '(' at open, or
+// -1 if it is never closed. Nested parens and parens inside quotes do not end
+// the substitution, so $(print $(print x)) and $(print "a)b") both find their
+// real end, and an unfinished $( is reported as unbalanced instead of consuming
+// the rest of the text.
+func matchCloseParen(s string, open int) int {
+	depth := 0
+	var quote byte
+	for i := open; i < len(s); i++ {
+		switch c := s[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// expandCommandSub runs src as a command substitution and returns its captured
+// output. The text is handed back to the parser wrapped in $(...) so that a
+// substitution written in a heredoc parses exactly like one written inline,
+// nesting included. Text that does not parse is left literal rather than
+// reported as an error, matching how an unterminated ${ is treated.
+func (e *Evaluator) expandCommandSub(src string) string {
+	literal := "$(" + src + ")"
+	p := parser.New(lexer.NewLexer(literal))
+	program := p.ParseProgram()
+	if len(p.Errors()) > 0 || len(program.Statements) != 1 {
+		return literal
+	}
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		return literal
+	}
+	sub, ok := stmt.Expression.(*ast.CommandSubstitution)
+	if !ok {
+		return literal
+	}
+	val, err := e.evalCommandSubstitution(sub)
+	if err != nil {
+		e.lastStatus = 1
+		return ""
+	}
+	return e.valueToString(val)
 }
 
 // lookupName resolves a name to its shell variable value, falling back to the

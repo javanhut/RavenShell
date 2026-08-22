@@ -25,7 +25,7 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 - **Human-Readable Aliases** - Natural-language names for common actions: `whereami`/`wai` (cwd), `read`/`view` (show a file), `remove`/`delete` (rm), `makefile`/`newfile`/`touch` (mkfile), `makedir` (mkdir)
 - **Built-in Help** - `raven-help` lists every built-in; `raven-help <command>` shows usage and aliases
 - **External Commands** - Run any program on your `PATH` (git, python, cat, ...) with flag support (`-l`, `--all`)
-- **Streaming Pipes & Redirection** - Run pipeline stages concurrently with bounded memory and redirect with `>`, `>>`, `<`
+- **Streaming Pipes & Redirection** - Run pipeline stages concurrently with bounded memory and redirect with `>`, `>>`, `<`, and `<<` heredocs (`<<'EOF'` for a literal body, `<<-` to strip leading tabs)
 - **Modern Script Arguments** - Script arguments are exposed as the `args` array, without numbered shell variables
 - **Scriptable Interactive Configuration** - Define aliases and load session files with `raven-alias`, `raven-unalias`, and `raven-source`
 - **Configuration** - Customize startup behavior with `.ravenrc`

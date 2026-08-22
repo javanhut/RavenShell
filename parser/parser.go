@@ -247,8 +247,13 @@ func (p *Parser) parseStatement() ast.Statement {
 	case token.RETURN:
 		return p.parseReturnStatement()
 	case token.IDENT:
-		// Check if this is an assignment (IDENT = value)
+		// `x = 5` (spaced) is RavenShell's assignment. A glued NAME=value is the
+		// shell's command prefix — `FOO=bar cmd` runs cmd with FOO set without
+		// setting it in the shell — so the two are parsed apart here.
 		if p.peekTokenIs(token.ASSIGN) {
+			if !p.peekToken.PrecededByWhitespace {
+				return p.parseEnvPrefixStatement()
+			}
 			return p.parseAssignmentStatement()
 		}
 		return p.parseExpressionStatement()
@@ -382,7 +387,7 @@ func (p *Parser) finishExternalCommand(name string) ast.Expression {
 
 // parseArguments collects the arguments that follow a command name (external or
 // built-in), stopping at a newline, a shell operator (|, &&, >, ;, ...), or the
-// start of a new assignment statement.
+// start of a new spaced assignment statement (`x = 5`).
 //
 // Reserved keywords (ls, rm, cd, env, for, ...) that appear here are taken as
 // literal argument words rather than dispatched as commands of their own. This
@@ -399,8 +404,10 @@ func (p *Parser) parseArguments(arith bool) []ast.Expression {
 		if p.peekToken.PrecededByNewline {
 			break
 		}
-		// Stop if we see IDENT followed by ASSIGN - that's a new statement.
-		if p.peekTokenIs(token.IDENT) && p.isNextAssignment() {
+		// Stop if we see IDENT followed by a *spaced* ASSIGN - that's a new
+		// statement. A glued FOO=bar has no assignment meaning here and stays
+		// one ordinary word.
+		if p.peekTokenIs(token.IDENT) && p.isNextSpacedAssignment() {
 			break
 		}
 
@@ -715,8 +722,11 @@ func (p *Parser) parseCommand(cmdTokenType token.TokenType) ast.Expression {
 	return cmd
 }
 
-// isNextAssignment checks if peek token is IDENT and the token after that is ASSIGN
-func (p *Parser) isNextAssignment() bool {
+// isNextSpacedAssignment reports whether the peek IDENT starts an assignment
+// statement. RavenShell assigns with the spaced form (`x = 5`) and sets the
+// environment with `export NAME value`, so only a whitespace-separated '='
+// assigns; a glued KEY=value is argument text (`printf a FOO=bar b`).
+func (p *Parser) isNextSpacedAssignment() bool {
 	// We need to look two tokens ahead: peek is IDENT, and the one after is ASSIGN
 	// Save current state
 	savedPos := p.l.GetPos()
@@ -725,7 +735,7 @@ func (p *Parser) isNextAssignment() bool {
 
 	// Advance to check
 	p.nextToken() // now curToken is the IDENT
-	isAssign := p.peekTokenIs(token.ASSIGN)
+	isAssign := p.peekTokenIs(token.ASSIGN) && p.peekToken.PrecededByWhitespace
 
 	// Restore state
 	p.l.SetPos(savedPos)
@@ -735,6 +745,60 @@ func (p *Parser) isNextAssignment() bool {
 	return isAssign
 }
 
+// parseEnvPrefixStatement parses one or more glued NAME=value words and the
+// command they belong to. The value is read as an argument word rather than an
+// expression, so `FOO=bar /bin/sh -c x` keeps /bin/sh as the command instead of
+// dividing `bar` by it.
+func (p *Parser) parseEnvPrefixStatement() ast.Statement {
+	stmt := &ast.EnvPrefixStatement{Token: p.curToken}
+
+	for {
+		name := p.curToken.Literal
+		p.nextToken() // curToken = '='
+
+		// `FOO=` with nothing glued after it is an explicitly empty value.
+		var value ast.Expression = &ast.StringLiteral{Token: p.curToken, Value: ""}
+		if !p.peekToken.PrecededByWhitespace && !p.peekToken.PrecededByNewline && p.peekStartsArgument() {
+			p.nextToken()
+			value = p.parseArgument()
+		}
+		stmt.Assignments = append(stmt.Assignments, ast.EnvAssignment{Name: name, Value: value})
+
+		// Several prefixes may stack: A=1 B=2 cmd.
+		if p.peekTokenIs(token.IDENT) && !p.peekToken.PrecededByNewline && p.isNextGluedAssignment() {
+			p.nextToken()
+			continue
+		}
+		break
+	}
+
+	// Whatever remains on the line is the command the assignments apply to.
+	if !p.peekToken.PrecededByNewline && p.peekStartsArgument() {
+		p.nextToken()
+		p.cmdPos = true
+		stmt.Command = p.parseExpression(LOWEST)
+	}
+
+	return stmt
+}
+
+// isNextGluedAssignment reports whether the peek IDENT begins another glued
+// NAME=value prefix, the counterpart to isNextSpacedAssignment.
+func (p *Parser) isNextGluedAssignment() bool {
+	savedPos := p.l.GetPos()
+	savedCur := p.curToken
+	savedPeek := p.peekToken
+
+	p.nextToken() // now curToken is the IDENT
+	glued := p.peekTokenIs(token.ASSIGN) && !p.peekToken.PrecededByWhitespace
+
+	p.l.SetPos(savedPos)
+	p.curToken = savedCur
+	p.peekToken = savedPeek
+
+	return glued
+}
+
 // isPathContinuation reports whether tok can extend a path it is glued to with
 // no intervening whitespace. Beyond identifiers, dots, and slashes, this also
 // covers integer segments (so v1.2.3.tgz stays whole), colons and at-signs (so
@@ -742,11 +806,19 @@ func (p *Parser) isNextAssignment() bool {
 // whole), and reserved words (so path segments may legitimately be named env,
 // output, print, in, ...: e.g. dir/output.go, .env.local, lib/print.txt).
 // Without this, any path segment that happens to be a keyword or a number would
-// split the path.
-func (p *Parser) isPathContinuation(tok token.Token) bool {
+// split the path. A FLAG segment counts only when it is glued straight after a
+// '/', so a directory literally named "-home-user" stays part of its path while
+// `ls -la` keeps its flag.
+func (p *Parser) isPathContinuation(prev, tok token.Token) bool {
 	switch tok.Type {
 	case token.IDENT, token.INTEGER, token.FULLSTOP, token.FSLASH, token.COLON, token.AT:
 		return true
+	case token.FLAG:
+		// A '-'-leading segment glued straight after a '/' is a directory or
+		// file name (/tmp/cache-1000/-home-user/x), not a flag: real flags are
+		// whitespace-separated from the command word, so they never reach here
+		// glued to a '/'.
+		return prev.Type == token.FSLASH
 	}
 	// A token whose literal maps back to its own type is a reserved word
 	// (ls, env, output, for, ...); treat it as plain path text here.
@@ -817,7 +889,7 @@ func (p *Parser) parsePath() ast.Expression {
 	// separate path arguments.
 	var pathStr strings.Builder
 	pathStr.WriteString(p.curToken.Literal)
-	for p.isPathContinuation(p.peekToken) {
+	for p.isPathContinuation(p.curToken, p.peekToken) {
 		if p.peekToken.PrecededByWhitespace {
 			break
 		}
@@ -842,7 +914,7 @@ func (p *Parser) parsePathFromIdent() ast.Expression {
 	var pathStr strings.Builder
 	pathStr.WriteString(p.curToken.Literal)
 
-	for p.isPathContinuation(p.peekToken) {
+	for p.isPathContinuation(p.curToken, p.peekToken) {
 		if p.peekToken.PrecededByWhitespace {
 			break
 		}
@@ -937,10 +1009,15 @@ func (p *Parser) parseRedirectionExpression(left ast.Expression) ast.Expression 
 	case token.OUT:
 		expression.Type = ast.REDIR_HEREDOC
 	}
+	h := p.attachHeredoc(expression, p.curToken)
 
 	p.nextToken()
-	// Parse target as a path/identifier, not as a command
-	expression.Target = p.parseRedirectionTarget()
+	if h != nil {
+		expression.Target = p.parseHeredocTarget(h)
+	} else {
+		// Parse target as a path/identifier, not as a command
+		expression.Target = p.parseRedirectionTarget()
+	}
 
 	return expression
 }
@@ -954,13 +1031,18 @@ func (p *Parser) parseRedirToken(left ast.Expression) ast.Expression {
 		Command: left,
 	}
 	parseRedirOp(expression, p.curToken.Literal)
+	h := p.attachHeredoc(expression, p.curToken)
 
 	if expression.IsDup {
 		return expression
 	}
 
 	p.nextToken()
-	expression.Target = p.parseRedirectionTarget()
+	if h != nil {
+		expression.Target = p.parseHeredocTarget(h)
+	} else {
+		expression.Target = p.parseRedirectionTarget()
+	}
 	return expression
 }
 
@@ -1001,6 +1083,36 @@ func parseRedirOp(expr *ast.RedirectionExpression, lit string) {
 		expr.IsDup = true
 		expr.DupFd, _ = strconv.Atoi(lit[1:])
 	}
+}
+
+// attachHeredoc copies the body the lexer collected for a heredoc operator onto
+// the redirection it opens, returning the heredoc so the caller can consume its
+// delimiter. The operator's byte offset is the key, so multiple heredocs on one
+// line each pick up their own body.
+func (p *Parser) attachHeredoc(expr *ast.RedirectionExpression, op token.Token) *lexer.Heredoc {
+	if expr.Type != ast.REDIR_HEREDOC {
+		return nil
+	}
+	h := p.l.HeredocAt(op.Offset)
+	if h == nil {
+		return nil
+	}
+	expr.HeredocBody = h.Body
+	expr.HeredocQuoted = h.Quoted
+	return h
+}
+
+// parseHeredocTarget consumes the delimiter word of a heredoc and returns it as
+// the redirection's target. The lexer already resolved the word — including
+// quoting (<<'EOF', <<\EOF) and pieces glued together — so this only has to
+// advance past the tokens it spans. Going through parseRedirectionTarget
+// instead would reject delimiters that are not valid filename expressions.
+func (p *Parser) parseHeredocTarget(h *lexer.Heredoc) ast.Expression {
+	tok := p.curToken
+	for p.curToken.End < h.DelimEnd && !p.curTokenIs(token.EOF) {
+		p.nextToken()
+	}
+	return &ast.Identifier{Token: tok, Value: h.Delimiter}
 }
 
 // parseRedirectionTarget parses the target of a redirection (always a path/identifier, never a command)
@@ -1285,9 +1397,10 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 
 // parseComparisonOrRedirection handles > and < which can be either comparison or redirection
 func (p *Parser) parseComparisonOrRedirection(left ast.Expression) ast.Expression {
-	// If left is a command or pipe expression, treat as redirection
+	// A command, a pipe, or a command that already carries a redirection: the
+	// second > in `cmd > a > b` stacks onto the first rather than comparing it.
 	switch left.(type) {
-	case *ast.Command, *ast.PipeExpression:
+	case *ast.Command, *ast.PipeExpression, *ast.RedirectionExpression:
 		return p.parseRedirectionFromGTLT(left)
 	}
 	// Otherwise treat as comparison

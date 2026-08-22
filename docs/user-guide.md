@@ -433,6 +433,20 @@ Read input from files:
 print < input.txt           # Read and print file contents
 ```
 
+### Heredocs
+
+Pass a block of inline text to a command with `<<`:
+
+```rsh
+sudo tee /etc/motd << EOF
+Welcome to the machine.
+EOF
+```
+
+The body ends at a line containing only the delimiter. An unquoted delimiter
+expands `$VAR` in the body; `<<'EOF'` (or `<<"EOF"`, `<<\EOF`) keeps it literal,
+and `<<-EOF` strips leading tabs so the block can stay indented with your code.
+
 ## Running External Programs
 
 Any command that isn't a built-in runs as an external program found on your

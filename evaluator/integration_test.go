@@ -325,3 +325,23 @@ func TestHelpEndToEnd(t *testing.T) {
 		t.Errorf("help rmdir should mention --force, got: %q", out)
 	}
 }
+
+// TestRedirectIntoDashDirectory guards the end-to-end path: a directory whose
+// name starts with '-' lexes as a FLAG token, and the redirect target used to be
+// truncated at the slash before it, so the shell tried to write to the parent
+// directory instead of the file.
+func TestRedirectIntoDashDirectory(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "-dash")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(sub, "out.txt")
+	if _, err := evalScript(t, dir, "print hi > "+target); err != nil {
+		t.Fatalf("redirect into %q failed: %v", target, err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "hi\n" {
+		t.Fatalf("file contents = %q, err=%v", data, err)
+	}
+}

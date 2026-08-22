@@ -294,6 +294,12 @@ type RedirectionExpression struct {
 	DupFd int  // target fd when IsDup (e.g. 1 in 2>&1)
 	IsDup bool // N>&M form: duplicate one fd onto another instead of a file
 	Both  bool // &> form: redirect both stdout and stderr
+
+	// Heredoc fields, set for REDIR_HEREDOC. Target holds the delimiter word;
+	// HeredocBody is the text the lexer collected for it. HeredocQuoted records
+	// a quoted delimiter (<<'EOF'), which suppresses expansion of the body.
+	HeredocBody   string
+	HeredocQuoted bool
 }
 
 func (re *RedirectionExpression) expressionNode()      {}
@@ -305,6 +311,39 @@ func (re *RedirectionExpression) String() string {
 	out.WriteString(" " + string(re.Type) + " ")
 	out.WriteString(re.Target.String())
 	out.WriteString(")")
+	return out.String()
+}
+
+// EnvAssignment is one NAME=value pair written in front of a command.
+type EnvAssignment struct {
+	Name  string
+	Value Expression
+}
+
+// EnvPrefixStatement is a command with NAME=value assignments in front of it
+// (FOO=bar cmd args), the shell spelling for running one command with extra
+// environment. The assignments apply only while Command runs; when Command is
+// nil there was no command on the line and they are ordinary assignments that
+// persist, which is how a shell treats a bare FOO=bar too.
+type EnvPrefixStatement struct {
+	Token       token.Token // the first NAME token
+	Assignments []EnvAssignment
+	Command     Expression // nil when the line is only assignments
+}
+
+func (es *EnvPrefixStatement) statementNode()       {}
+func (es *EnvPrefixStatement) TokenLiteral() string { return es.Token.Literal }
+func (es *EnvPrefixStatement) String() string {
+	var out bytes.Buffer
+	for i, a := range es.Assignments {
+		if i > 0 {
+			out.WriteString(" ")
+		}
+		out.WriteString(a.Name + "=" + a.Value.String())
+	}
+	if es.Command != nil {
+		out.WriteString(" " + es.Command.String())
+	}
 	return out.String()
 }
 

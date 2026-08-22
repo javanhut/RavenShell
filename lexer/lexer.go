@@ -12,6 +12,12 @@ type Lexer struct {
 	input      string
 	pos        int
 	lineStarts []int
+
+	// heredocs maps the byte offset of a heredoc operator to the body collected
+	// for it; skips are the body regions that must not be tokenized. Both are
+	// filled once, up front, by scanHeredocs.
+	heredocs map[int]*Heredoc
+	skips    []heredocSkip
 }
 
 func NewLexer(input string) *Lexer {
@@ -21,7 +27,9 @@ func NewLexer(input string) *Lexer {
 			starts = append(starts, i+1)
 		}
 	}
-	return &Lexer{input: input, pos: 0, lineStarts: starts}
+	l := &Lexer{input: input, pos: 0, lineStarts: starts, heredocs: map[int]*Heredoc{}}
+	l.scanHeredocs()
+	return l
 }
 
 // GetPos returns the current lexer position (for lookahead)
@@ -109,6 +117,15 @@ func (l *Lexer) NextToken() token.Token {
 // was a newline (so the parser can detect token adjacency and line boundaries).
 func (l *Lexer) skipWhitespaceAndComments() (sawWhitespace, sawNewline bool) {
 	for {
+		// A heredoc body is content for the command, not source to tokenize:
+		// step over it as if it were whitespace. The command line it belongs to
+		// has already ended, so this counts as a newline.
+		if end, ok := l.heredocSkipAt(l.pos); ok {
+			l.pos = end
+			sawWhitespace = true
+			sawNewline = true
+			continue
+		}
 		ch := l.peek()
 		if ch == '\n' {
 			sawWhitespace = true
@@ -282,6 +299,12 @@ func (l *Lexer) scanToken() token.Token {
 			start := l.pos
 			l.advance()
 			l.advance()
+			// <<- is the tab-stripping heredoc form. The '-' belongs to the
+			// operator; without this it would lex as the start of a flag and
+			// swallow the delimiter (<<-EOF becoming `<<` and `-EOF`).
+			if l.peek() == '-' {
+				l.advance()
+			}
 			return token.Token{Type: token.OUT, Literal: l.input[start:l.pos]}
 		} else if l.peekNext() == '=' {
 			start := l.pos
@@ -414,7 +437,11 @@ func (l *Lexer) scanRedirFrom(start int) token.Token {
 	}
 	op := l.peek() // '>' or '<'
 	l.advance()
-	if l.peek() == op { // >> or <<
+	doubled := l.peek() == op
+	if doubled { // >> or <<
+		l.advance()
+	}
+	if doubled && op == '<' && l.peek() == '-' { // 0<<- tab-stripping heredoc
 		l.advance()
 	}
 	if l.peek() == '&' { // fd duplication: >&1, 2>&1

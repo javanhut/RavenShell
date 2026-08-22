@@ -34,6 +34,9 @@ func TestInputIncomplete(t *testing.T) {
 		{"echo a && echo b", false, "&& with a right-hand side"},
 		{"echo a | cat", false, "pipe with a right-hand side"},
 		{"echo a #b", false, "trailing comment is not a trailing operator"},
+		{"cat <<EOF\nbody\nEOF", false, "heredoc closed by its delimiter line"},
+		{"cat <<-EOF\n\tbody\n\tEOF", false, "<<- heredoc closed by a tab-indented delimiter"},
+		{"echo '<<EOF'", false, "<< inside a string does not open a heredoc"},
 
 		// Incomplete: unbalanced brackets / strings.
 		{`echo "unterminated`, true, "open double quote"},
@@ -50,6 +53,12 @@ func TestInputIncomplete(t *testing.T) {
 		{"echo a &&", true, "trailing logical and"},
 		{"echo a |   ", true, "trailing pipe with trailing whitespace"},
 		{"echo a | # note", true, "trailing pipe before a comment"},
+
+		// Incomplete: a heredoc still waiting for its delimiter line.
+		{"cat <<EOF", true, "heredoc opened, no body yet"},
+		{"cat <<EOF\nbody so far", true, "heredoc body still being typed"},
+		{"cat <<EOF\nnotEOF", true, "delimiter must be the whole line"},
+		{"cat <<'EOF'\nbody", true, "quoted-delimiter heredoc still open"},
 	}
 
 	for _, c := range cases {

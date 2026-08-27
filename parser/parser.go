@@ -629,8 +629,14 @@ func (p *Parser) parseArgument() ast.Expression {
 // parseIntLiteral parses a base-10 integer word into an int64, returning 0 if it
 // does not fit (the word was already established to be a single INTEGER token,
 // so this only guards against overflow).
+//
+// Base 10 explicitly, not base 0. The lexer only ever builds an INTEGER out of
+// a run of digits -- no 0x, no sign -- so base 0's auto-detection had nothing
+// to detect except a leading zero, which it read as octal: `0755` came out as
+// 493 and `08`, not being octal at all, failed and came out as 0. The spelling
+// is preserved separately, so this value is only ever what arithmetic sees.
 func parseIntLiteral(s string) int64 {
-	v, err := strconv.ParseInt(s, 0, 64)
+	v, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		return 0
 	}
@@ -759,7 +765,9 @@ func (p *Parser) parseNegation() ast.Expression {
 func (p *Parser) parseIntegerLiteral() ast.Expression {
 	lit := &ast.IntegerLiteral{Token: p.curToken}
 
-	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64)
+	// Base 10 for the same reason as parseIntLiteral: an INTEGER token is a run
+	// of digits, so base 0 could only ever misread a leading zero as octal.
+	value, err := strconv.ParseInt(p.curToken.Literal, 10, 64)
 	if err != nil {
 		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
 		p.errorAt(p.curToken, msg)

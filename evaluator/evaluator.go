@@ -29,6 +29,24 @@ import (
 // Value represents any value in the shell
 type Value any
 
+// NumWord is a bare numeric word from the source: an integer that still knows
+// how it was spelled.
+//
+// A shell word is a string first and a number only where a number is asked
+// for, and the spelling is part of the data -- `0755` is a mode, `007` is a
+// name, `08` is a month. Evaluating such a word straight to int64 threw that
+// away and rendered it back as decimal, so `chmod 0644 f` reached chmod as
+// `420` and silently set mode 0420. Keeping both halves means the spelling
+// survives everywhere the word is used as a word, while arithmetic still gets
+// a number.
+//
+// Only a literal in the source becomes a NumWord. Anything computed is an
+// int64: a result has no spelling to preserve.
+type NumWord struct {
+	Val int64  // the numeric value, for arithmetic
+	Lit string // the word exactly as written
+}
+
 // controlKind identifies a non-local control-flow transfer.
 type controlKind int
 
@@ -462,7 +480,7 @@ func (e *Evaluator) evalExpressionValue(expr ast.Expression) (Value, error) {
 		}
 		return node.Value, nil
 	case *ast.IntegerLiteral:
-		return node.Value, nil
+		return NumWord{Val: node.Value, Lit: node.Token.Literal}, nil
 	case *ast.VariableReference:
 		// A shell variable keeps its type, so `$x - 1` is arithmetic rather
 		// than a failed string subtraction. Names that only exist in the
@@ -538,6 +556,10 @@ func (e *Evaluator) valueToString(val Value) string {
 	switch v := val.(type) {
 	case string:
 		return v
+	case NumWord:
+		// The spelling, not the value: a word used as a word is passed on as
+		// it was written.
+		return v.Lit
 	case int64:
 		return strconv.FormatInt(v, 10)
 	case int:
@@ -563,6 +585,8 @@ func (e *Evaluator) valueToString(val Value) string {
 // valueToInt64 converts a Value to int64
 func (e *Evaluator) valueToInt64(val Value) (int64, error) {
 	switch v := val.(type) {
+	case NumWord:
+		return v.Val, nil
 	case int64:
 		return v, nil
 	case int:
@@ -579,6 +603,8 @@ func (e *Evaluator) valueToBool(val Value) bool {
 	switch v := val.(type) {
 	case bool:
 		return v
+	case NumWord:
+		return v.Val != 0
 	case int64:
 		return v != 0
 	case int:

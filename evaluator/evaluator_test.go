@@ -31,6 +31,23 @@ func run(t *testing.T, src string) (*Evaluator, string) {
 	return e, buf.String()
 }
 
+// wantNum asserts that a stored value is numerically want, whichever shape it
+// arrived in. A literal keeps the spelling it was written with and is a
+// NumWord; anything computed has no spelling to keep and is a plain int64.
+// Comparing against int64 directly would assert the representation rather than
+// the value, and fail on the difference between `x = 5` and `x = 4 + 1`.
+func wantNum(t *testing.T, e *Evaluator, name string, got Value, want int64) {
+	t.Helper()
+	n, err := e.valueToInt64(got)
+	if err != nil {
+		t.Errorf("%s = %v (%T), want %d: %v", name, got, got, want, err)
+		return
+	}
+	if n != want {
+		t.Errorf("%s = %v (%T), want %d", name, got, got, want)
+	}
+}
+
 func TestArithmeticPrecedence(t *testing.T) {
 	e, _ := run(t, "result = 10 + 5 * 2")
 	if got := e.vars["result"]; got != int64(20) {
@@ -54,9 +71,7 @@ func TestStringConcatenation(t *testing.T) {
 
 func TestArrayIndex(t *testing.T) {
 	e, _ := run(t, "nums = [10, 20, 30]\nsecond = nums[1]")
-	if got := e.vars["second"]; got != int64(20) {
-		t.Errorf("second = %v, want 20", got)
-	}
+	wantNum(t, e, "second", e.vars["second"], 20)
 }
 
 func TestRangeAndAppend(t *testing.T) {
@@ -113,9 +128,38 @@ print notacall (1)`
 func TestUnaryMinus(t *testing.T) {
 	e, _ := run(t, "a = -5\nb = 2 - -3\nc = -2 * 3\nd = 10 - 4\nx = 5\nn = -(x)")
 	for name, want := range map[string]int64{"a": -5, "b": 5, "c": -6, "d": 6, "n": -5} {
-		if got := e.vars[name]; got != want {
-			t.Errorf("%s = %v, want %d", name, got, want)
-		}
+		wantNum(t, e, name, e.vars[name], want)
+	}
+}
+
+// A bare numeric word is an argument, not a number, and reaches the command
+// spelled the way it was written. It used to be parsed to an int64 and printed
+// back as decimal, with a leading zero read as octal: `chmod 0644 f` arrived as
+// `chmod 420 f` and silently set mode 0420, and `install -m 0755` as `-m 493`.
+// `08` is not octal at all, so it failed to parse and arrived as `0`.
+func TestNumericWordKeepsSpelling(t *testing.T) {
+	_, out := run(t, "echo 0755 0644 007 08 09 0 00 42")
+	want := "0755 0644 007 08 09 0 00 42"
+	if got := strings.TrimSpace(out); got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+// The spelling survives a variable too, so `m = 0644` then `chmod $m f` means
+// the same thing as `chmod 0644 f`.
+func TestNumericWordSpellingSurvivesVariable(t *testing.T) {
+	_, out := run(t, "m = 0644\necho $m")
+	if got := strings.TrimSpace(out); got != "0644" {
+		t.Errorf("output = %q, want 0644", got)
+	}
+}
+
+// ...while still being a number wherever a number is asked for, read as base 10
+// rather than as octal.
+func TestNumericWordIsBaseTenInArithmetic(t *testing.T) {
+	e, _ := run(t, "a = 0755 + 0\nb = 08 + 1\nc = 010 * 2\nd = 5 + 1")
+	for name, want := range map[string]int64{"a": 755, "b": 9, "c": 20, "d": 6} {
+		wantNum(t, e, name, e.vars[name], want)
 	}
 }
 
@@ -226,9 +270,7 @@ func TestRecursion(t *testing.T) {
 func TestFunctionScopeIsolation(t *testing.T) {
 	// A parameter named like a global must not mutate the global.
 	e, _ := run(t, "x = 100\nfn f(x) { return x * 2 }\ny = f(5)")
-	if got := e.vars["x"]; got != int64(100) {
-		t.Errorf("global x = %v, want 100 (should be untouched)", got)
-	}
+	wantNum(t, e, "global x", e.vars["x"], 100)
 	if got := e.vars["y"]; got != int64(10) {
 		t.Errorf("y = %v, want 10", got)
 	}
@@ -474,9 +516,9 @@ s = '$name'`)
 
 func TestSemicolonSeparator(t *testing.T) {
 	e, _ := run(t, `a = 1 ; b = 2 ; c = 3`)
-	if e.vars["a"] != int64(1) || e.vars["b"] != int64(2) || e.vars["c"] != int64(3) {
-		t.Errorf("got a=%v b=%v c=%v", e.vars["a"], e.vars["b"], e.vars["c"])
-	}
+	wantNum(t, e, "a", e.vars["a"], 1)
+	wantNum(t, e, "b", e.vars["b"], 2)
+	wantNum(t, e, "c", e.vars["c"], 3)
 }
 
 func TestLogicalAndShortCircuits(t *testing.T) {
@@ -543,9 +585,7 @@ func TestExternalCommandNotFound(t *testing.T) {
 func TestExternalCommandVariableFallback(t *testing.T) {
 	// A bare name with no args that matches a variable is a value, not a command.
 	e, _ := run(t, "myvar = 42\nprint myvar")
-	if got := e.vars["myvar"]; got != int64(42) {
-		t.Errorf("myvar = %v, want 42", got)
-	}
+	wantNum(t, e, "myvar", e.vars["myvar"], 42)
 
 	// And execExternal directly resolves the variable rather than erroring.
 	out, err := e.execExternal("myvar", nil)

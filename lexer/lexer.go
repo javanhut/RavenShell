@@ -65,6 +65,14 @@ func (l *Lexer) BraceGroupClosesAt(pos int) bool {
 	return false
 }
 
+// EmptyBracesAt reports whether the text at pos (the position just past a '{')
+// closes that brace immediately, i.e. the source reads `{}`. An empty pair is
+// never a control-flow block and never an expansion group; it is the literal
+// placeholder word of `find -exec cmd {} +` and `xargs -I {}`.
+func (l *Lexer) EmptyBracesAt(pos int) bool {
+	return pos < len(l.input) && l.input[pos] == '}'
+}
+
 func (l *Lexer) peek() byte {
 	if l.pos >= len(l.input) {
 		return 0
@@ -248,6 +256,16 @@ func (l *Lexer) scanToken() token.Token {
 			return token.Token{Type: token.EQ, Literal: l.input[start:l.pos]}
 		}
 		return token.Token{Type: token.ASSIGN, Literal: string(l.advance())}
+	case '\\':
+		// An unquoted backslash escapes the next character so it is literal
+		// word text instead of shell syntax: `find . -exec rm {} \;` passes a
+		// bare ';' to find. (A backslash before a newline is a line continuation
+		// and was already consumed by skipWhitespaceAndComments.)
+		if next := l.peekNext(); next != 0 {
+			l.advance()
+			return token.Token{Type: token.STRING, Literal: string(l.advance()), SingleQuoted: true}
+		}
+		return token.Token{Type: token.ILLEGAL, Literal: string(l.advance())}
 	case '!':
 		if l.peekNext() == '=' {
 			start := l.pos

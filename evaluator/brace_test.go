@@ -49,3 +49,9 @@ func TestMakeDirBraceExpansion(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyBracesStayLiteral(t *testing.T) {
+	if got := braceExpand("{}"); len(got) != 1 || got[0] != "{}" {
+		t.Errorf("braceExpand(\"{}\") = %v, want [{}]", got)
+	}
+}

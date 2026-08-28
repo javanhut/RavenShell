@@ -455,9 +455,10 @@ func isArithOperand(e ast.Expression) bool {
 // the argument list.
 func (p *Parser) peekStartsArgument() bool {
 	// A '{' begins an argument only when it opens a valid brace-expansion group
-	// (mkdir {a,b}); otherwise it is a control-flow block boundary (while x {).
+	// (mkdir {a,b}) or is the literal `{}` placeholder (find -exec cmd {} +);
+	// otherwise it is a control-flow block boundary (while x {).
 	if p.peekTokenIs(token.LBRACE) {
-		return p.peekStartsBraceGroup()
+		return p.peekStartsBraceGroup() || p.l.EmptyBracesAt(p.l.GetPos())
 	}
 	return !isWordBoundary(p.peekToken.Type)
 }

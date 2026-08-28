@@ -780,3 +780,47 @@ func TestOperatorLedLineStartsNewStatement(t *testing.T) {
 		}
 	}
 }
+
+// TestFindExecPlaceholderArguments is the regression for
+// `find /lib/firmware -name '*.zst' -exec zstd -d --rm -q {} +` failing with
+// "no prefix parse function for LBRACE found": the literal `{}` placeholder and
+// the trailing `+` must stay arguments of find, not fall out as expressions.
+func TestFindExecPlaceholderArguments(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []string
+	}{
+		{"find x -name '*.zst' -exec zstd -d --rm -q {} +", []string{"x", "-name", "*.zst", "-exec", "zstd", "-d", "--rm", "-q", "{}", "+"}},
+		{`find x -exec rm {} \;`, []string{"x", "-exec", "rm", "{}", ";"}},
+		{"xargs -I {} ls {}", []string{"-I", "{}", "ls", "{}"}},
+	}
+	for _, c := range cases {
+		p := New(lexer.NewLexer(c.input))
+		program := p.ParseProgram()
+		checkParserErrors(t, p)
+		if len(program.Statements) != 1 {
+			t.Fatalf("%q: got %d statements, want 1", c.input, len(program.Statements))
+		}
+		cmd, ok := program.Statements[0].(*ast.ExpressionStatement).Expression.(*ast.Command)
+		if !ok || cmd.Type != ast.CMD_EXTERNAL {
+			t.Fatalf("%q: not an external command: %T", c.input, program.Statements[0].(*ast.ExpressionStatement).Expression)
+		}
+		if len(cmd.Arguments) != len(c.want) {
+			t.Fatalf("%q: got %d args, want %d (%s)", c.input, len(cmd.Arguments), len(c.want), cmd.String())
+		}
+		for i, w := range c.want {
+			var got string
+			switch a := cmd.Arguments[i].(type) {
+			case *ast.BraceExpression:
+				got = a.Word.String()
+			case *ast.StringLiteral:
+				got = a.Value
+			default:
+				got = a.String()
+			}
+			if got != w {
+				t.Errorf("%q: arg %d = %q (%T), want %q", c.input, i, got, cmd.Arguments[i], w)
+			}
+		}
+	}
+}

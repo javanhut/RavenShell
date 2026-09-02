@@ -1,8 +1,10 @@
 package readline
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -275,5 +277,74 @@ func TestSuggestionTail(t *testing.T) {
 	}
 	if got := suggestionTail([]rune("git status"), "git status"); got != nil {
 		t.Errorf("suggestionTail with equal-length suggestion = %q, want nil", string(got))
+	}
+}
+
+func TestReadCSIStopsAtFinalByte(t *testing.T) {
+	cases := []struct {
+		in     string
+		params string
+		final  byte
+		rest   string
+	}{
+		{"[A", "", 'A', ""},
+		{"[3~x", "3", '~', "x"},
+		{"[200~hello", "200", '~', "hello"},
+		{"[1;5Cq", "1;5", 'C', "q"},
+	}
+	for _, c := range cases {
+		in := strings.NewReader(c.in)
+		params, final, ok := readCSI(in)
+		if !ok || params != c.params || final != c.final {
+			t.Fatalf("readCSI(%q) = (%q, %q, %v), want (%q, %q, true)", c.in, params, final, ok, c.params, c.final)
+		}
+		rest, _ := io.ReadAll(in)
+		if string(rest) != c.rest {
+			t.Fatalf("readCSI(%q) left %q unread, want %q", c.in, rest, c.rest)
+		}
+	}
+	if _, _, ok := readCSI(strings.NewReader("x")); ok {
+		t.Fatal("readCSI accepted a non-CSI sequence")
+	}
+}
+
+func TestReadPasteStopsAtEndMarker(t *testing.T) {
+	in := strings.NewReader("echo a\r\necho b\x1b[201~tail")
+	if got, want := readPaste(in), "echo a\r\necho b"; got != want {
+		t.Fatalf("readPaste = %q, want %q", got, want)
+	}
+	rest, _ := io.ReadAll(in)
+	if string(rest) != "tail" {
+		t.Fatalf("readPaste consumed past the marker; left %q", rest)
+	}
+	// No marker: everything read so far is the paste.
+	if got := readPaste(strings.NewReader("abc")); got != "abc" {
+		t.Fatalf("readPaste without marker = %q, want %q", got, "abc")
+	}
+}
+
+func TestPasteRunesNormalizes(t *testing.T) {
+	got := string(pasteRunes("a\r\nb\rc\td\x1b[31m\x00é\n\n"))
+	if want := "a\nb\nc d[31mé"; got != want {
+		t.Fatalf("pasteRunes = %q, want %q", got, want)
+	}
+}
+
+func TestHistoryFileRoundTripsMultiLine(t *testing.T) {
+	dir := t.TempDir()
+	r := &Readline{historyFile: dir + "/history"}
+	r.AddHistory("echo a\necho b")
+	r.AddHistory("ls")
+
+	r2 := &Readline{historyFile: r.historyFile}
+	r2.loadHistory()
+	want := []string{"echo a\necho b", "ls"}
+	if len(r2.history) != len(want) {
+		t.Fatalf("reloaded history = %q, want %q", r2.history, want)
+	}
+	for i := range want {
+		if r2.history[i] != want[i] {
+			t.Fatalf("reloaded history[%d] = %q, want %q", i, r2.history[i], want[i])
+		}
 	}
 }

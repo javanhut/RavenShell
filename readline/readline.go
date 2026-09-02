@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"ravenshell/ansi"
@@ -36,6 +37,22 @@ const (
 	keyEnter     = 13
 	keyEscape    = 27
 )
+
+// Bracketed paste (DECSET 2004). While it is on, the terminal wraps pasted
+// text in ESC [ 200 ~ ... ESC [ 201 ~ so ReadLine can insert it into the
+// buffer verbatim — newlines included — instead of executing each pasted line
+// as if it had been typed followed by Enter. It is switched on only for the
+// duration of a ReadLine call so child processes see the terminal untouched.
+const (
+	bracketedPasteOn  = "\x1b[?2004h"
+	bracketedPasteOff = "\x1b[?2004l"
+	pasteEndMarker    = "\x1b[201~"
+)
+
+// historyNewline stands in for an embedded newline when a multi-line entry is
+// written to the line-oriented history file. It is a control character the
+// editor never accepts as input, so it cannot collide with command text.
+const historyNewline = "\x1e"
 
 // Candidate is one completion choice. Text replaces the word being completed;
 // Desc, when non-empty, is shown dimmed next to it in the completion listing;
@@ -71,7 +88,7 @@ type Readline struct {
 	// Multi-line redraw bookkeeping. The editable region (prompt + line +
 	// autosuggestion) can wrap across several terminal rows; draw uses these to
 	// clear every row the previous render occupied before reprinting.
-	oldpos  int // cursor offset within line at the previous draw
+	oldrow  int // physical row (within the region) the cursor was on at the previous draw
 	maxrows int // most physical rows the current line has used
 }
 
@@ -110,7 +127,7 @@ func (r *Readline) loadHistory() {
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		line := scanner.Text()
+		line := strings.ReplaceAll(scanner.Text(), historyNewline, "\n")
 		if line == "" {
 			continue
 		}
@@ -132,7 +149,7 @@ func (r *Readline) appendHistoryFile(line string) {
 		return
 	}
 	defer file.Close()
-	fmt.Fprintln(file, line)
+	fmt.Fprintln(file, strings.ReplaceAll(line, "\n", historyNewline))
 }
 
 // SetCompleter sets a custom completion function
@@ -200,6 +217,10 @@ func (r *Readline) ReadLine() (string, error) {
 		return "", err
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
+
+	// Ask the terminal to bracket pastes for the duration of this read.
+	fmt.Print(bracketedPasteOn)
+	defer fmt.Print(bracketedPasteOff)
 
 	// Line buffer and cursor position
 	line := []rune{}
@@ -335,79 +356,72 @@ func (r *Readline) ReadLine() (string, error) {
 			}
 
 		case keyEscape:
-			// Read escape sequence
-			n, _ = os.Stdin.Read(buf[:2])
-			if n == 2 && buf[0] == '[' {
-				switch buf[1] {
-				case 'A': // Up arrow - history previous
-					if r.historyIdx > 0 {
-						if r.historyIdx == len(r.history) {
-							savedLine = string(line)
-						}
-						r.historyIdx--
+			params, final, ok := readCSI(os.Stdin)
+			if !ok {
+				continue
+			}
+			switch {
+			case final == 'A': // Up arrow - history previous
+				if r.historyIdx > 0 {
+					if r.historyIdx == len(r.history) {
+						savedLine = string(line)
+					}
+					r.historyIdx--
+					line = []rune(r.history[r.historyIdx])
+					pos = len(line)
+					r.refresh(line, pos)
+				}
+
+			case final == 'B': // Down arrow - history next
+				if r.historyIdx < len(r.history) {
+					r.historyIdx++
+					if r.historyIdx == len(r.history) {
+						line = []rune(savedLine)
+					} else {
 						line = []rune(r.history[r.historyIdx])
-						pos = len(line)
-						r.refresh(line, pos)
 					}
-
-				case 'B': // Down arrow - history next
-					if r.historyIdx < len(r.history) {
-						r.historyIdx++
-						if r.historyIdx == len(r.history) {
-							line = []rune(savedLine)
-						} else {
-							line = []rune(r.history[r.historyIdx])
-						}
-						pos = len(line)
-						r.refresh(line, pos)
-					}
-
-				case 'C': // Right arrow / accept autosuggestion at end of line
-					if pos < len(line) {
-						pos++
-						r.refresh(line, pos)
-					} else if nl, np, ok := r.tryAcceptSuggestion(line, pos); ok {
-						line, pos = nl, np
-						r.refresh(line, pos)
-					}
-
-				case 'D': // Left arrow
-					if pos > 0 {
-						pos--
-						r.refresh(line, pos)
-					}
-
-				case 'H': // Home
-					pos = 0
+					pos = len(line)
 					r.refresh(line, pos)
+				}
 
-				case 'F': // End / accept autosuggestion
-					if nl, np, ok := r.tryAcceptSuggestion(line, pos); ok {
-						line, pos = nl, np
-					} else {
-						pos = len(line)
-					}
+			case final == 'C': // Right arrow / accept autosuggestion at end of line
+				if pos < len(line) {
+					pos++
 					r.refresh(line, pos)
-
-				case '3': // Delete key (followed by ~)
-					os.Stdin.Read(buf[:1]) // consume ~
-					if pos < len(line) {
-						line = append(line[:pos], line[pos+1:]...)
-						r.refresh(line, pos)
-					}
-
-				case '1': // Home (alternate)
-					os.Stdin.Read(buf[:1]) // consume ~
-					pos = 0
+				} else if nl, np, ok := r.tryAcceptSuggestion(line, pos); ok {
+					line, pos = nl, np
 					r.refresh(line, pos)
+				}
 
-				case '4': // End (alternate) / accept autosuggestion
-					os.Stdin.Read(buf[:1]) // consume ~
-					if nl, np, ok := r.tryAcceptSuggestion(line, pos); ok {
-						line, pos = nl, np
-					} else {
-						pos = len(line)
-					}
+			case final == 'D': // Left arrow
+				if pos > 0 {
+					pos--
+					r.refresh(line, pos)
+				}
+
+			case final == 'H', final == '~' && (params == "1" || params == "7"): // Home
+				pos = 0
+				r.refresh(line, pos)
+
+			case final == 'F', final == '~' && (params == "4" || params == "8"): // End / accept autosuggestion
+				if nl, np, ok := r.tryAcceptSuggestion(line, pos); ok {
+					line, pos = nl, np
+				} else {
+					pos = len(line)
+				}
+				r.refresh(line, pos)
+
+			case final == '~' && params == "3": // Delete key
+				if pos < len(line) {
+					line = append(line[:pos], line[pos+1:]...)
+					r.refresh(line, pos)
+				}
+
+			case final == '~' && params == "200": // Bracketed paste
+				ins := pasteRunes(readPaste(os.Stdin))
+				if len(ins) > 0 {
+					line = append(line[:pos], append(ins, line[pos:]...)...)
+					pos += len(ins)
 					r.refresh(line, pos)
 				}
 			}
@@ -423,6 +437,77 @@ func (r *Readline) ReadLine() (string, error) {
 			}
 		}
 	}
+}
+
+// readCSI reads the remainder of a CSI sequence (the ESC has already been
+// consumed) one byte at a time, so nothing past the final byte is taken from
+// the stream. It returns the parameter string (e.g. "3" for ESC [ 3 ~, "200"
+// for the paste-start marker) and the final byte. ok is false for anything
+// that is not a CSI sequence, in which case the one byte read is dropped —
+// the same treatment stray Alt-key sequences received before.
+func readCSI(in io.Reader) (params string, final byte, ok bool) {
+	var b [1]byte
+	if n, err := in.Read(b[:]); n != 1 || err != nil || b[0] != '[' {
+		return "", 0, false
+	}
+	var p strings.Builder
+	for {
+		if n, err := in.Read(b[:]); n != 1 || err != nil {
+			return "", 0, false
+		}
+		switch c := b[0]; {
+		case c >= 0x30 && c <= 0x3f: // parameter bytes
+			p.WriteByte(c)
+		case c >= 0x20 && c <= 0x2f: // intermediate bytes: none we act on
+		case c >= 0x40 && c <= 0x7e: // final byte
+			return p.String(), c, true
+		default: // C0 control inside a sequence: give up on it
+			return "", 0, false
+		}
+	}
+}
+
+// readPaste reads pasted bytes up to and excluding the ESC [ 201 ~ end marker
+// that the terminal sends when bracketed paste is on. A read error ends the
+// paste with whatever arrived so far.
+func readPaste(in io.Reader) string {
+	var buf []byte
+	var b [1]byte
+	for {
+		if n, err := in.Read(b[:]); n != 1 || err != nil {
+			return string(buf)
+		}
+		buf = append(buf, b[0])
+		if len(buf) >= len(pasteEndMarker) && string(buf[len(buf)-len(pasteEndMarker):]) == pasteEndMarker {
+			return string(buf[:len(buf)-len(pasteEndMarker)])
+		}
+	}
+}
+
+// pasteRunes turns pasted text into runes safe to hold in the line buffer:
+// CR LF and bare CR become '\n', tabs become a space (the renderer has no
+// tab stops), every other control character is dropped, and trailing
+// newlines are trimmed so a paste ending in a newline still waits for Enter
+// rather than sitting on an empty row. Embedded newlines are kept: the whole
+// block is submitted at once and the lexer treats them as line boundaries.
+func pasteRunes(text string) []rune {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.TrimRight(text, "\n")
+	out := make([]rune, 0, len(text))
+	for _, ch := range text {
+		switch {
+		case ch == '\n':
+			out = append(out, ch)
+		case ch == '\t':
+			out = append(out, ' ')
+		case ch < 0x20 || ch == 0x7f || ch == utf8.RuneError:
+			// dropped
+		default:
+			out = append(out, ch)
+		}
+	}
+	return out
 }
 
 // ensureFreshLine guarantees the cursor is at the start of a line before the
@@ -615,8 +700,46 @@ func (r *Readline) refresh(line []rune, pos int) {
 // the line yet on screen (start of a read, after Ctrl-L, after a completion
 // listing), so the next draw does not try to clear rows that aren't there.
 func (r *Readline) resetDrawState() {
-	r.oldpos = 0
+	r.oldrow = 0
 	r.maxrows = 1
+}
+
+// layout walks the editable text — a prompt of plen cells followed by the
+// first n runes — with xterm-style deferred wrap on a terminal cols wide and
+// returns the cursor's row and column afterwards. A '\n' rune (which
+// renderText emits as CR LF) starts a new row. col may come back equal to
+// cols: the last cell of the row was written and the wrap is pending, which
+// is exactly the state the terminal is in.
+func layout(cols, plen int, runes []rune, n int) (row, col int) {
+	for i := 0; i < plen; i++ {
+		if col >= cols {
+			row, col = row+1, 0
+		}
+		col++
+	}
+	for _, r := range runes[:n] {
+		if r == '\n' {
+			row, col = row+1, 0
+			continue
+		}
+		if col >= cols {
+			row, col = row+1, 0
+		}
+		col++
+	}
+	return row, col
+}
+
+// renderText writes runes to b, turning each '\n' into CR LF so a multi-line
+// buffer (a bracketed paste) draws as stacked rows starting at column 0.
+func renderText(b *strings.Builder, runes []rune) {
+	for _, r := range runes {
+		if r == '\n' {
+			b.WriteString("\r\n")
+		} else {
+			b.WriteRune(r)
+		}
+	}
 }
 
 // suggestionTail returns the part of the autosuggestion beyond what is already
@@ -654,21 +777,23 @@ func (r *Readline) draw(line []rune, pos int, suggestion string) {
 func (r *Readline) renderEscapes(cols int, line []rune, pos int, suggestion string) string {
 	plen := displayWidth(r.prompt)
 	tail := suggestionTail(line, suggestion)
-	blen := len(line) + len(tail) // displayed cells after the prompt
+	shown := append(append([]rune{}, line...), tail...) // displayed runes after the prompt
 
 	var b strings.Builder
 
-	// Rows the new render needs, and the cursor's row within the previous render.
-	rows := max((plen+blen+cols-1)/cols, 1)
-	rpos := (plen + r.oldpos + cols) / cols
+	// Rows the new render occupies: the row of the last displayed cell, plus
+	// one. With the wrap pending (endCol == cols) that last cell still sits on
+	// endRow, so no extra row is counted for it here.
+	endRow, endCol := layout(cols, plen, shown, len(shown))
+	rows := endRow + 1
 	oldRows := r.maxrows
 	if rows > r.maxrows {
 		r.maxrows = rows
 	}
 
 	// 1) Go to the last row the previous render used.
-	if oldRows-rpos > 0 {
-		fmt.Fprintf(&b, "\033[%dB", oldRows-rpos)
+	if down := oldRows - 1 - r.oldrow; down > 0 {
+		fmt.Fprintf(&b, "\033[%dB", down)
 	}
 	// 2) Clear each row from the bottom up, then 3) clear the top row.
 	for j := 0; j < oldRows-1; j++ {
@@ -678,17 +803,17 @@ func (r *Readline) renderEscapes(cols int, line []rune, pos int, suggestion stri
 
 	// 4) Reprint prompt, line, and the dim suggestion tail.
 	b.WriteString(r.prompt)
-	b.WriteString(string(line))
+	renderText(&b, line)
 	if len(tail) > 0 {
 		b.WriteString(ansi.BrightBlk)
-		b.WriteString(string(tail))
+		renderText(&b, tail)
 		b.WriteString(ansi.Reset)
 	}
 
-	// 5) If the cursor is at the very end of the buffer and lands exactly at
-	// column 0 of a fresh row, emit a newline so the terminal scrolls and the
-	// cursor has a row to occupy.
-	if pos == blen && pos != 0 && (pos+plen)%cols == 0 {
+	// 5) If the cursor is at the very end of the buffer with the wrap pending,
+	// emit a newline so the terminal scrolls and the cursor has a row to
+	// occupy at column 0 of the next line.
+	if pos == len(shown) && endCol >= cols {
 		b.WriteString("\n\r")
 		rows++
 		if rows > r.maxrows {
@@ -696,18 +821,23 @@ func (r *Readline) renderEscapes(cols int, line []rune, pos int, suggestion stri
 		}
 	}
 
-	// 6) Move the cursor up to its target row, then across to its column.
-	rpos2 := (plen + pos + cols) / cols
-	if rows-rpos2 > 0 {
-		fmt.Fprintf(&b, "\033[%dA", rows-rpos2)
+	// 6) Move the cursor up to its target row, then across to its column. A
+	// pending wrap at the cursor means it logically sits at the start of the
+	// following row.
+	curRow, curCol := layout(cols, plen, shown, pos)
+	if curCol >= cols {
+		curRow, curCol = curRow+1, 0
 	}
-	if col := (plen + pos) % cols; col > 0 {
-		fmt.Fprintf(&b, "\r\033[%dC", col)
+	if up := rows - 1 - curRow; up > 0 {
+		fmt.Fprintf(&b, "\033[%dA", up)
+	}
+	if curCol > 0 {
+		fmt.Fprintf(&b, "\r\033[%dC", curCol)
 	} else {
 		b.WriteString("\r")
 	}
 
-	r.oldpos = pos
+	r.oldrow = curRow
 	return b.String()
 }
 
@@ -715,14 +845,18 @@ func (r *Readline) renderEscapes(cols int, line []rune, pos int, suggestion stri
 // unavailable. It clears the current row and reprints; correct when the content
 // fits on one row.
 func (r *Readline) drawSingleLine(line []rune, pos int, suggestion string) {
-	fmt.Print("\r\033[K")
-	fmt.Print(r.prompt)
-	fmt.Print(string(line))
+	var b strings.Builder
+	b.WriteString("\r\033[K")
+	b.WriteString(r.prompt)
+	renderText(&b, line)
 
 	tail := suggestionTail(line, suggestion)
 	if len(tail) > 0 {
-		fmt.Print(ansi.BrightBlk + string(tail) + ansi.Reset)
+		b.WriteString(ansi.BrightBlk)
+		renderText(&b, tail)
+		b.WriteString(ansi.Reset)
 	}
+	fmt.Print(b.String())
 
 	if end := len(line) + len(tail); end > pos {
 		fmt.Printf("\033[%dD", end-pos)

@@ -208,3 +208,87 @@ func TestDrawShrinksBackToOneRow(t *testing.T) {
 		t.Fatalf("after shrinking, screen = %q, want just the prompt %q", term.text(), want)
 	}
 }
+
+// row returns the trimmed text of one model row.
+func (m *miniTerm) rowText(i int) string {
+	if i >= len(m.rows) {
+		return ""
+	}
+	return strings.TrimRight(string(m.rows[i]), " ")
+}
+
+// TestDrawMultiLinePaste renders a buffer holding embedded newlines (as a
+// bracketed paste leaves it): each line lands on its own row starting at
+// column 0, edits redraw in place, and deleting it all leaves one prompt row.
+func TestDrawMultiLinePaste(t *testing.T) {
+	const cols = 20
+	prompt := "> "
+	r := &Readline{historyIdx: -1, prompt: prompt}
+	term := newMiniTerm(cols)
+
+	r.resetDrawState()
+	term.write(r.renderEscapes(cols, []rune{}, 0, ""))
+
+	pasted := []rune("echo one\necho two\necho three")
+	term.write(r.renderEscapes(cols, pasted, len(pasted), ""))
+	for i, want := range []string{"> echo one", "echo two", "echo three"} {
+		if got := term.rowText(i); got != want {
+			t.Fatalf("row %d = %q, want %q", i, got, want)
+		}
+	}
+	if term.row != 2 || term.col != len("echo three") {
+		t.Fatalf("cursor at (%d,%d), want (2,%d)", term.row, term.col, len("echo three"))
+	}
+
+	// Move the cursor into the middle line and type a character there.
+	pos := len("echo one\necho tw")
+	term.write(r.renderEscapes(cols, pasted, pos, ""))
+	if term.row != 1 || term.col != len("echo tw") {
+		t.Fatalf("cursor at (%d,%d), want (1,%d)", term.row, term.col, len("echo tw"))
+	}
+	edited := append(append([]rune{}, pasted[:pos]...), append([]rune("X"), pasted[pos:]...)...)
+	term.write(r.renderEscapes(cols, edited, pos+1, ""))
+	if got := term.rowText(1); got != "echo twXo" {
+		t.Fatalf("after edit row 1 = %q, want %q", got, "echo twXo")
+	}
+	if got := term.promptRows(prompt); got != 1 {
+		t.Fatalf("prompt appears on %d rows, want 1", got)
+	}
+
+	// Delete everything: no stale rows remain.
+	term.write(r.renderEscapes(cols, []rune{}, 0, ""))
+	if want := strings.TrimRight(prompt, " "); term.text() != want {
+		t.Fatalf("after clearing, screen = %q, want %q", term.text(), want)
+	}
+}
+
+// TestDrawNewlineAfterFullRow covers a pasted line that exactly fills the
+// terminal width before its newline: the deferred wrap must not add an empty
+// row between it and the next line.
+func TestDrawNewlineAfterFullRow(t *testing.T) {
+	const cols = 10
+	prompt := "> "
+	r := &Readline{historyIdx: -1, prompt: prompt}
+	term := newMiniTerm(cols)
+
+	r.resetDrawState()
+	term.write(r.renderEscapes(cols, []rune{}, 0, ""))
+
+	line := []rune("12345678\nnext")
+	term.write(r.renderEscapes(cols, line, len(line), ""))
+	if got := term.rowText(0); got != "> 12345678" {
+		t.Fatalf("row 0 = %q", got)
+	}
+	if got := term.rowText(1); got != "next" {
+		t.Fatalf("row 1 = %q, want %q", got, "next")
+	}
+	if term.row != 1 || term.col != 4 {
+		t.Fatalf("cursor at (%d,%d), want (1,4)", term.row, term.col)
+	}
+
+	// Cursor at the end of the full first row sits at column 0 of row 1.
+	term.write(r.renderEscapes(cols, line, 8, ""))
+	if term.row != 1 || term.col != 0 {
+		t.Fatalf("cursor at (%d,%d), want (1,0)", term.row, term.col)
+	}
+}

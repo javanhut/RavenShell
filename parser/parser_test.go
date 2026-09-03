@@ -824,3 +824,66 @@ func TestFindExecPlaceholderArguments(t *testing.T) {
 		}
 	}
 }
+
+func TestExternalCommandNameWithOperatorCharacters(t *testing.T) {
+	// The lexer splits `g++` into IDENT + PLUS + PLUS. In command position the
+	// glued tokens must join back into a single command name, the same way
+	// argument words absorb glued operator characters. Previously this ran a
+	// command named "g" with "++" as its first argument.
+	tests := []struct {
+		input   string
+		name    string
+		argsLen int
+	}{
+		{"g++ main.cpp -o main", "g++", 3},
+		{"g++ --version", "g++", 1},
+		{"c++ x.cpp", "c++", 1},
+		{"clang++ x.cpp", "clang++", 1},
+		{"g++-14 x.cpp", "g++-14", 1},
+		{"/usr/bin/g++ x.cpp", "/usr/bin/g++", 1},
+		{"./g++ x.cpp", "./g++", 1},
+		{"~/bin/g++ x.cpp", "~/bin/g++", 1},
+		{"g++", "g++", 0},
+	}
+	for _, tt := range tests {
+		l := lexer.NewLexer(tt.input)
+		p := New(l)
+		program := p.ParseProgram()
+		checkParserErrors(t, p)
+
+		if len(program.Statements) != 1 {
+			t.Fatalf("%q: got %d statements, want 1", tt.input, len(program.Statements))
+		}
+		cmd, ok := program.Statements[0].(*ast.ExpressionStatement).Expression.(*ast.Command)
+		if !ok {
+			t.Fatalf("%q: expression is not Command. got=%T", tt.input, program.Statements[0].(*ast.ExpressionStatement).Expression)
+		}
+		if cmd.Type != ast.CMD_EXTERNAL || cmd.Name != tt.name {
+			t.Errorf("%q: got command {%s %q}, want external %q", tt.input, cmd.Type, cmd.Name, tt.name)
+		}
+		if len(cmd.Arguments) != tt.argsLen {
+			t.Errorf("%q: wrong arg count. got=%d, want %d (%s)", tt.input, len(cmd.Arguments), tt.argsLen, cmd.String())
+		}
+	}
+}
+
+func TestExternalCommandNameStopsAtBoundaries(t *testing.T) {
+	// A command name must not swallow a glued pipe: the boundary rule for
+	// argument words applies to the name too.
+	input := "g++ x.cpp|wc"
+	l := lexer.NewLexer(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+	if len(program.Statements) != 1 {
+		t.Fatalf("got %d statements, want 1", len(program.Statements))
+	}
+	pipe, ok := program.Statements[0].(*ast.ExpressionStatement).Expression.(*ast.PipeExpression)
+	if !ok {
+		t.Fatalf("expression is not PipeExpression. got=%T", program.Statements[0].(*ast.ExpressionStatement).Expression)
+	}
+	left := pipe.Left.(*ast.Command)
+	if left.Name != "g++" || len(left.Arguments) != 1 {
+		t.Errorf("left of pipe = %s, want g++ with one argument", left.String())
+	}
+}

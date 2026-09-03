@@ -369,15 +369,51 @@ func (p *Parser) parseFlagLiteral() ast.Expression {
 }
 
 // finishExternalCommand builds a CMD_EXTERNAL command node with the given name
-// and collects its arguments. curToken must be the command's name token.
+// and collects its arguments. curToken must be the command's (last) name token.
+//
+// The name is first extended across any tokens glued directly onto it, so a
+// command word is assembled by the same rule as an argument word: `g++`,
+// `clang++`, `/usr/bin/g++`, or `c++-14` stay one name even though the lexer
+// splits them at the operator characters. Spaced arithmetic (`a + b`) is never
+// glued, so it is unaffected.
 func (p *Parser) finishExternalCommand(name string) ast.Expression {
 	cmd := &ast.Command{
 		Token: p.curToken,
-		Name:  name,
+		Name:  p.extendCommandName(name),
 		Type:  ast.CMD_EXTERNAL,
 	}
 	cmd.Arguments = p.parseArguments(false)
 	return cmd
+}
+
+// extendCommandName appends the literal text of every token glued (no
+// whitespace) onto the command name so far. It stops at word boundaries (pipes,
+// redirections, grouping, ...) and at quoted strings and $-expansions, which
+// are never part of a bare command name.
+func (p *Parser) extendCommandName(name string) string {
+	if !p.peekIsGluedNameText() {
+		return name
+	}
+	var b strings.Builder
+	b.WriteString(name)
+	for p.peekIsGluedNameText() {
+		p.nextToken()
+		b.WriteString(p.curToken.Literal)
+	}
+	return b.String()
+}
+
+// peekIsGluedNameText reports whether the peek token continues the current
+// command name: it is glued to the previous token and is plain literal text.
+func (p *Parser) peekIsGluedNameText() bool {
+	if p.peekToken.PrecededByWhitespace || p.peekToken.PrecededByNewline {
+		return false
+	}
+	switch p.peekToken.Type {
+	case token.STRING, token.DOLLAR, token.LASTSTATUS:
+		return false
+	}
+	return !isWordBoundary(p.peekToken.Type)
 }
 
 // parseArguments collects the arguments that follow a command name (external or

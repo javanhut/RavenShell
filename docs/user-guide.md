@@ -400,10 +400,11 @@ show file1.txt file2.txt    # Display multiple files
 ### Printing Output
 
 ```rsh
-print "Hello, World!"       # Print a string
-print variable_name         # Print variable value
-print 1 + 2                 # Print expression result
-print "Count:" count        # Print multiple values
+print "Hello, World!"       # Hello, World!
+count = 3
+print count                 # 3
+print 1 + 2                 # 3
+print "Count:" count        # Count: 3
 ```
 
 ### Pipes
@@ -430,7 +431,8 @@ ls >> files.txt             # Append to file
 Read input from files:
 
 ```rsh
-print < input.txt           # Read and print file contents
+print "some text" > input.txt
+print < input.txt           # some text
 ```
 
 ## Running External Programs
@@ -442,7 +444,7 @@ search/system `PATH`:
 git status                  # run git
 python --version            # run python with a flag
 ls -la                      # flags are passed through
-print "a b c" | wc -w       # external programs work in pipes
+print "a b c" | wc -w       # 3 -- external programs work in pipes
 ```
 
 Use `print` for the shell's own text output; bare words are for invoking
@@ -455,7 +457,7 @@ git pull && make            # make only if pull succeeds
 test -f x || print "no x"   # print only if the test fails
 build ; deploy              # run one after the other
 sleep 60 &                  # run in the background
-print $?                    # exit status of the last command
+print $?                    # e.g. 0 -- exit status of the last command
 ```
 
 ## Managing Processes
@@ -484,8 +486,8 @@ kill %1             # stop it
 Read environment variables with `$` and set them with `export`:
 
 ```rsh
-print $HOME                 # Print home directory
-print $USER                 # Print username
+print $HOME                 # e.g. /home/you
+print $USER                 # e.g. you
 cd $HOME                    # Change to home directory
 
 export EDITOR=vim           # Set a variable

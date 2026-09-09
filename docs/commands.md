@@ -85,7 +85,7 @@ cwd
 ```rsh
 cwd
 whereami            # same thing, reads more naturally
-# Output: /home/user/projects
+# Output: e.g. /home/user/projects
 ```
 
 ---
@@ -309,7 +309,7 @@ whoami
 **Example:**
 ```rsh
 whoami
-# Output: username
+# Output: e.g. username
 ```
 
 ---
@@ -339,7 +339,7 @@ When used alone, prints the home directory path.
 **Example:**
 ```rsh
 ~
-# Output: /home/username
+# Output: e.g. /home/username
 ```
 
 **Note:** Can also be used in path expressions like `~/Documents`.
@@ -367,7 +367,7 @@ export EDITOR=vim
 print $EDITOR               # vim
 
 export MODELS=~/.ollama/models
-print $MODELS               # /Users/you/.ollama/models
+print $MODELS               # e.g. /home/you/.ollama/models
 
 export GREETING hello world
 print $GREETING             # hello world
@@ -421,26 +421,34 @@ raven-add path              # list current search paths
 
 ---
 
-### raven-help - Built-in Command Help
+### raven-help - Built-in Command and Language Help
 
-Lists all built-in commands grouped by category, or shows detailed help for a
-single command. Command names passed to it may be aliases (e.g. `read`), which
-resolve to their canonical command.
+Lists all built-in commands grouped by category followed by the language
+topics, or shows detailed help for a single command or topic. Command names
+passed to it may be aliases (e.g. `read`), which resolve to their canonical
+command; topics have aliases too (`help indexing` opens `arrays`).
 
 **Aliases:** `help`
 
 **Syntax:**
 ```
-raven-help                  # list every built-in command
+raven-help                  # list every built-in command and language topic
 raven-help <command>        # show usage, summary, and aliases for one command
+raven-help <topic>          # explain one part of the language
 ```
+
+**Language topics:** `syntax`, `variables`, `strings`, `arrays`, `operators`,
+`control-flow`, `functions`, `commands`, `expansion`.
 
 **Examples:**
 ```rsh
-raven-help                  # overview of all commands
+raven-help                  # overview of all commands and topics
 help                        # same thing
 raven-help rmdir            # details for rmdir, including --force
 help read                   # resolves to the `show` command
+raven-help syntax           # how statements, commands, and blocks fit together
+help strings                # quoting, escapes, and interpolation
+help if                     # alias for control-flow
 ```
 
 ---
@@ -497,7 +505,7 @@ git status
 python --version
 ls -la
 grep -n "TODO" notes.txt
-print "a b c" | wc -w       # external commands work in pipes
+print "a b c" | wc -w       # 3 -- external commands work in pipes
 ```
 
 **Notes:**

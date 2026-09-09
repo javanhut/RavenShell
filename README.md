@@ -23,7 +23,7 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 - **Environment & Substitution** - `export NAME=value` (or `export NAME value`), `env`, `$(command)` substitution, and `$VAR` interpolation in double quotes
 - **Built-in Commands** - File system operations (ls, cd, mkdir, rm, etc.)
 - **Human-Readable Aliases** - Natural-language names for common actions: `whereami`/`wai` (cwd), `read`/`view` (show a file), `remove`/`delete` (rm), `makefile`/`newfile`/`touch` (mkfile), `makedir` (mkdir)
-- **Built-in Help** - `raven-help` lists every built-in; `raven-help <command>` shows usage and aliases
+- **Built-in Help** - `raven-help` lists every built-in and language topic; `raven-help <command>` shows usage and aliases, `raven-help syntax` (or `strings`, `arrays`, `functions`, ...) explains the language from inside the shell
 - **External Commands** - Run any program on your `PATH` (git, python, cat, ...) with flag support (`-l`, `--all`)
 - **Streaming Pipes & Redirection** - Run pipeline stages concurrently with bounded memory and redirect with `>`, `>>`, `<`
 - **Modern Script Arguments** - Script arguments are exposed as the `args` array, without numbered shell variables

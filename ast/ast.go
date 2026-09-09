@@ -495,6 +495,10 @@ type CallExpression struct {
 	Token     token.Token  // the function name token
 	Function  string       // function name (range, append, etc.)
 	Arguments []Expression // function arguments
+	// CommandFallback marks `name (args)` written at the start of a statement
+	// with a space before the parenthesis. If no function called name exists,
+	// it is run as the external command name with the values as arguments.
+	CommandFallback bool
 }
 
 func (ce *CallExpression) expressionNode()      {}

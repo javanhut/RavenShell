@@ -638,14 +638,46 @@ func (e *Evaluator) evalCommand(cmd *ast.Command) (string, error) {
 
 	// Track exit status for $?. External commands set their own status; other
 	// commands are 0 on success and 1 on error.
+	//
+	// A builtin that fails at its job (ls of a missing directory, cd to a
+	// missing path, rm of a missing file) behaves like a failing external
+	// command: the message goes to the current stderr, so `2>/dev/null` can
+	// silence it, $? becomes 1, and the program carries on so that `||` and
+	// `if` can react. Language-level failures (control flow, exit, interrupts,
+	// errors that already carry a position) still propagate.
 	if cmd.Type != ast.CMD_EXTERNAL {
-		if err != nil {
-			e.lastStatus = 1
-		} else {
+		if err == nil {
 			e.lastStatus = 0
+			return result, nil
+		}
+		e.lastStatus = 1
+		if isCommandFailure(err) {
+			fmt.Fprintln(e.stderr, prefixCommandError(cmd.Name, err))
+			return "", nil
 		}
 	}
 	return result, err
+}
+
+// isCommandFailure reports whether err is an ordinary builtin failure rather
+// than a control-flow or language-level error that must unwind the program.
+func isCommandFailure(err error) bool {
+	if _, ok := asControl(err); ok || errors.Is(err, ErrInterrupted) {
+		return false
+	}
+	var exit *ExitRequest
+	var runtimeErr *RuntimeError
+	return !errors.As(err, &exit) && !errors.As(err, &runtimeErr)
+}
+
+// prefixCommandError formats a builtin failure as `name: message`, without
+// doubling a prefix the builtin already supplied.
+func prefixCommandError(name string, err error) string {
+	msg := err.Error()
+	if strings.HasPrefix(msg, name+":") {
+		return msg
+	}
+	return name + ": " + msg
 }
 
 // evalArgs evaluates command argument expressions, splatting array values into
@@ -805,11 +837,11 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 		// command set distinct non-zero statuses and report to stderr, but do
 		// not abort the program.
 		if errors.Is(err, os.ErrPermission) {
-			fmt.Fprintf(os.Stderr, "%s: permission denied\n", name)
+			fmt.Fprintf(e.stderr, "%s: permission denied\n", name)
 			e.lastStatus = 126
 			return "", nil
 		}
-		fmt.Fprintf(os.Stderr, "%s: command not found\n", name)
+		fmt.Fprintf(e.stderr, "%s: command not found\n", name)
 		e.lastStatus = 127
 		return "", nil
 	}
@@ -844,7 +876,7 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); !ok {
 			// A real run error (not just a non-zero exit) - report it.
-			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			fmt.Fprintf(e.stderr, "%s: %v\n", name, err)
 		}
 	}
 
@@ -2141,6 +2173,25 @@ func (e *Evaluator) evalCallExpression(node *ast.CallExpression) (Value, error) 
 		return e.callFunction(fn, args)
 	}
 
+	// `echo (1 + 2)` at the start of a statement: no function called echo, so
+	// run the command echo with the evaluated values as its arguments.
+	if node.CommandFallback {
+		var strs []string
+		for _, a := range args {
+			if arr, ok := a.([]Value); ok {
+				for _, el := range arr {
+					strs = append(strs, e.valueToString(el))
+				}
+			} else {
+				strs = append(strs, e.valueToString(a))
+			}
+		}
+		if expansion, ok := e.aliases[node.Function]; ok {
+			return e.execAlias(node.Function, expansion, strs)
+		}
+		return e.execExternal(node.Function, strs)
+	}
+
 	return nil, fmt.Errorf("unknown function: %s", node.Function)
 }
 
@@ -2636,6 +2687,26 @@ func (e *Evaluator) evalArrayLiteral(node *ast.ArrayLiteral) (Value, error) {
 }
 
 // evalIndexExpression handles array indexing: arr[0]
+// describeIndexTarget names what was indexed: the variable name when the
+// target is a bare name, otherwise the value's type.
+func describeIndexTarget(expr ast.Expression, val Value) string {
+	switch n := expr.(type) {
+	case *ast.Identifier:
+		return "'" + n.Value + "'"
+	case *ast.VariableReference:
+		if n.Name != nil {
+			return "'" + n.Name.Value + "'"
+		}
+	}
+	switch val.(type) {
+	case string:
+		return "a string"
+	case int64, NumWord:
+		return "a number"
+	}
+	return fmt.Sprintf("%T", val)
+}
+
 func (e *Evaluator) evalIndexExpression(node *ast.IndexExpression) (Value, error) {
 	left, err := e.evalExpressionValue(node.Left)
 	if err != nil {
@@ -2649,7 +2720,7 @@ func (e *Evaluator) evalIndexExpression(node *ast.IndexExpression) (Value, error
 
 	arr, ok := left.([]Value)
 	if !ok {
-		return nil, fmt.Errorf("index operator not supported on %T", left)
+		return nil, fmt.Errorf("cannot index %s: not an array", describeIndexTarget(node.Left, left))
 	}
 
 	idx, err := e.valueToInt64(index)

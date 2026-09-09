@@ -17,10 +17,19 @@ import (
 // assert on both success and failure paths.
 func evalScript(t *testing.T, dir, src string) (string, error) {
 	t.Helper()
+	_, out, err := evalScriptIn(t, dir, src)
+	return out, err
+}
+
+// evalScriptIn is evalScript that also hands back the evaluator, for tests
+// that need $? after the script ran. Its stderr is discarded.
+func evalScriptIn(t *testing.T, dir, src string) (*Evaluator, string, error) {
+	t.Helper()
 	e := New()
 	e.cwd = dir
 	var buf bytes.Buffer
 	e.stdout = &buf
+	e.stderr = &bytes.Buffer{}
 
 	l := lexer.NewLexer(src)
 	p := parser.New(l)
@@ -29,7 +38,20 @@ func evalScript(t *testing.T, dir, src string) (string, error) {
 		t.Fatalf("parser errors for %q: %v", src, errs)
 	}
 	err := e.Eval(program)
-	return buf.String(), err
+	return e, buf.String(), err
+}
+
+// failedCommand asserts that src ran to completion with a non-zero $?: the
+// way a builtin reports failing at its job, as opposed to a script error.
+func failedCommand(t *testing.T, dir, src, what string) {
+	t.Helper()
+	e, _, err := evalScriptIn(t, dir, src)
+	if err != nil {
+		t.Fatalf("%s: script error %v, want a failed command status", what, err)
+	}
+	if e.LastStatus() == 0 {
+		t.Fatalf("%s: $? = 0, want non-zero", what)
+	}
 }
 
 func TestModernScriptArguments(t *testing.T) {
@@ -80,10 +102,7 @@ func TestRavenAliasAndUnalias(t *testing.T) {
 	if err != nil || out != "hello world\n" {
 		t.Fatalf("alias output = %q, err=%v", out, err)
 	}
-	_, err = evalScript(t, dir, "raven-unalias missing")
-	if err == nil {
-		t.Fatal("removing an unknown alias should fail")
-	}
+	failedCommand(t, dir, "raven-unalias missing", "removing an unknown alias should fail")
 }
 
 func TestRavenSourceSharesLanguageState(t *testing.T) {
@@ -127,9 +146,7 @@ func TestSafeFileCommandSemantics(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "folder"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := evalScript(t, dir, "rm folder"); err == nil {
-		t.Fatal("rm should refuse a directory without --recursive")
-	}
+	failedCommand(t, dir, "rm folder", "rm should refuse a directory without --recursive")
 	if _, err := evalScript(t, dir, "rm --recursive folder"); err != nil {
 		t.Fatal(err)
 	}
@@ -288,9 +305,7 @@ func TestMakeAndRemoveLifecycle(t *testing.T) {
 	}
 
 	// rmdir without force must fail on a non-empty directory.
-	if _, err := evalScript(t, dir, "rmdir project"); err == nil {
-		t.Error("rmdir on a non-empty directory should fail without --force")
-	}
+	failedCommand(t, dir, "rmdir project", "rmdir on a non-empty directory should fail without --force")
 	if _, err := os.Stat(filepath.Join(dir, "project")); err != nil {
 		t.Errorf("project should still exist after failed rmdir: %v", err)
 	}

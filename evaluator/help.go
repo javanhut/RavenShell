@@ -114,11 +114,14 @@ func (e *Evaluator) execRavenHelp(args []string) (string, error) {
 	color := e.colorOutput()
 
 	if len(args) > 0 {
-		entry, ok := findHelp(args[0])
-		if !ok {
-			return "", fmt.Errorf("raven-help: no built-in command %q (run raven-help to list them)", args[0])
+		var out string
+		if entry, ok := findHelp(args[0]); ok {
+			out = renderHelpDetail(entry, color)
+		} else if topic, ok := findTopic(args[0]); ok {
+			out = renderTopicDetail(topic, color)
+		} else {
+			return "", fmt.Errorf("raven-help: no built-in command or language topic %q (run raven-help to list them)", args[0])
 		}
-		out := renderHelpDetail(entry, color)
 		fmt.Fprint(e.stdout, out)
 		return out, nil
 	}
@@ -148,13 +151,18 @@ func dim(s string, color bool) string {
 func renderHelpOverview(color bool) string {
 	var out bytes.Buffer
 	out.WriteString(bold("RavenShell built-in commands", color) + "\n")
-	out.WriteString(dim("Run 'raven-help <command>' for details on one command.", color) + "\n")
+	out.WriteString(dim("Run 'raven-help <command>' for details on one command, or 'raven-help <topic>' for the language.", color) + "\n")
 
-	// Widest "name" column so summaries align.
+	// Widest "name" column so summaries align, across commands and topics.
 	width := 0
 	for _, h := range helpEntries {
 		if len(h.name) > width {
 			width = len(h.name)
+		}
+	}
+	for _, t := range helpTopics {
+		if len(t.name) > width {
+			width = len(t.name)
 		}
 	}
 
@@ -171,6 +179,11 @@ func renderHelpOverview(color bool) string {
 				out.WriteString(dim(alias, color) + "\n")
 			}
 		}
+	}
+
+	out.WriteString("\n" + bold("Language topics", color) + "\n")
+	for _, t := range helpTopics {
+		out.WriteString(fmt.Sprintf("  %-*s  %s", width, t.name, t.summary) + "\n")
 	}
 	return out.String()
 }

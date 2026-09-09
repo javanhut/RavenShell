@@ -4,54 +4,19 @@ Behaviour that is wrong and not yet fixed, recorded so it is not rediscovered
 from scratch each time. Each entry has a repro that can be pasted into
 `ravenshell -c`.
 
-Last reviewed: 2026-08-27.
+Last reviewed: 2026-09-09.
 
-## Indexing does not work in command-argument position
+No open issues.
 
-`arr[i]` evaluates correctly in expression context, but as an argument to a
-command it is parsed as two separate things: the bare name, and then a stray
-index applied to the result. The command runs with the whole array, and the
-leftover `[i]` is evaluated against a string.
+Fixed since the last review, kept here so the repro stays paired with the
+behaviour it guards (each has a test in `evaluator/known_issues_test.go`):
 
-```rsh
-n = [10, 20, 30]
-
-s = n[1]
-print s          # 20 -- correct
-
-print n[1]       # prints "10 20 30", then:
-                 # error: index operator not supported on string
-```
-
-`echo n[1]` fails the same way, so this is the argument path rather than
-anything specific to `print`. Parenthesising does not help — `print (n[1])`
-prints an empty line and no error, which is a third wrong answer.
-
-Workaround: index into a variable first, then pass the variable.
-
-```rsh
-second = n[1]
-print second
-```
-
-## A failing builtin ignores redirection and aborts the script
-
-A builtin that fails raises a script-level error. That error is reported before
-redirection is applied, so `2>/dev/null` does not suppress it, and it ends the
-script rather than setting a status and carrying on. An external command that
-fails does neither of those things.
-
-```rsh
-/bin/ls /nonexistent 2>/dev/null   # suppressed
-echo after-external                # reached
-
-ls /nonexistent 2>/dev/null        # NOT suppressed:
-                                   # error: ls: stat /nonexistent: ...
-echo after-builtin                 # NOT reached
-```
-
-The difference is visible without redirection too: `false; echo reached`
-prints `reached`, while `ls /nonexistent; echo reached` does not.
-
-Workaround: call the external binary by path (`/bin/ls`) where the failure needs
-to be suppressed or survived.
+- **Indexing in command-argument position.** `print n[1]` printed the whole
+  array and then failed; it now prints the element. `print $n[1]`, nested
+  `m[0][1]`, and `print (n[1])` work too.
+- **A failing builtin aborted the script and ignored redirection.** A builtin
+  that fails at its job (`ls /nonexistent`, `cd /missing`, `rm /missing`) now
+  reports on the shell's stderr, so `2>/dev/null` silences it, sets `$?` to 1,
+  and the program carries on; `||`, `&&`, and `if` can react to it.
+- **`print (expr)` printed an empty line.** A parenthesised expression is now
+  one argument evaluated as a value: `print (2 + 3)` prints 5.

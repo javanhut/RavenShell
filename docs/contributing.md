@@ -318,3 +318,26 @@ func TestParseCommand(t *testing.T) {
 - Welcome newcomers
 - Focus on the code, not the person
 - Accept constructive criticism gracefully
+
+## Executable examples
+
+The ```rsh blocks in `docs/` are run by `go test ./evaluator -run TestDocsAreExecutable`
+(`evaluator/docs_test.go`). A block is run only when it states an expectation;
+every statement in such a block runs in a fresh session inside a temporary
+directory, and output is compared with whitespace collapsed.
+
+| Written in the doc | Meaning |
+|--------------------|---------|
+| `print x            # 5` | the statement prints `5` |
+| `print 10 / 0       # error: division by zero` | the statement fails and the error mentions that text |
+| `print n[1]         # 20 -- prose` | text after ` -- ` is commentary |
+| `print $HOME        # e.g. /home/you` | illustrative only, not checked |
+| `# Output: 0 1 2` on its own line | everything printed since the previous marker (or the block start) |
+| `# Output:` followed by `# 0`, `# 1`, ... | the same, one line per comment |
+| `# Output: e.g. ...` | illustrative marker, not checked |
+| `# ravenshell build.rsh debug app` | the block runs with `args` set to `debug app` |
+
+Only lines beginning with `print`, `output`, or `echo` carry a trailing
+expectation; a comment on any other statement is documentation. A statement
+that fails without an `error:` expectation fails the test, so an example that
+depends on a file or variable must create it in the same block.

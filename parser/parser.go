@@ -336,8 +336,15 @@ func (p *Parser) parseIdentifierOrCommand() ast.Expression {
 	}
 
 	// An identifier immediately followed by '(' is a function call, e.g. foo(x).
+	// With a space, `f (7)` is still a call to f when f is a function; if it is
+	// not, the evaluator runs it as the command f with 7 as its argument.
 	if p.peekTokenIs(token.LPAREN) {
-		return p.parseCallExpression()
+		spaced := p.peekToken.PrecededByWhitespace
+		call := p.parseCallExpression()
+		if ce, ok := call.(*ast.CallExpression); ok && cmdPos && spaced {
+			ce.CommandFallback = true
+		}
+		return call
 	}
 
 	// Check if this identifier is directly followed (no space) by path tokens
@@ -430,13 +437,23 @@ func (p *Parser) peekIsGluedNameText() bool {
 func (p *Parser) parseArguments(arith bool) []ast.Expression {
 	args := []ast.Expression{}
 
-	for p.peekStartsArgument() {
+	for p.peekStartsArgument() || p.peekStartsGroup() {
 		// A newline ends the command's argument list.
 		if p.peekToken.PrecededByNewline {
 			break
 		}
 		p.nextToken()
-		arg := p.parseArgument()
+		var arg ast.Expression
+		if p.curTokenIs(token.LPAREN) {
+			// A parenthesised expression is one argument evaluated as a value:
+			// `print (2 + 3)`, `print (n[1])`, `print (x) * 2`.
+			arg = p.parseGroupedExpression()
+			if arg == nil {
+				return args
+			}
+		} else {
+			arg = p.parseArgument()
+		}
 		if arith {
 			args = p.parseArithmeticTail(args, arg)
 			continue
@@ -477,10 +494,29 @@ func (p *Parser) parseArithmeticTail(args []ast.Expression, left ast.Expression)
 // arithmetic. Words, paths and strings cannot - they are literal text.
 func isArithOperand(e ast.Expression) bool {
 	switch e.(type) {
-	case *ast.IntegerLiteral, *ast.CallExpression, *ast.InfixExpression, *ast.VariableReference:
+	case *ast.IntegerLiteral, *ast.CallExpression, *ast.InfixExpression, *ast.VariableReference,
+		*ast.IndexExpression:
 		return true
 	}
 	return false
+}
+
+// peekGluedIndex reports whether the peek token is a '[' glued to the current
+// word (no whitespace), i.e. an index operator rather than a new argument.
+func (p *Parser) peekGluedIndex() bool {
+	return p.peekTokenIs(token.LBRACKET) && !p.peekToken.PrecededByWhitespace && !p.peekToken.PrecededByNewline
+}
+
+// parseGluedIndexes applies every glued '[...]' to left: n[1], m[0][1].
+func (p *Parser) parseGluedIndexes(left ast.Expression) ast.Expression {
+	for p.peekGluedIndex() {
+		p.nextToken()
+		left = p.parseIndexExpression(left)
+		if left == nil {
+			return nil
+		}
+	}
+	return left
 }
 
 // peekStartsArgument reports whether the peek token can begin another argument
@@ -497,6 +533,13 @@ func (p *Parser) peekStartsArgument() bool {
 		return p.peekStartsBraceGroup() || p.l.EmptyBracesAt(p.l.GetPos())
 	}
 	return !isWordBoundary(p.peekToken.Type)
+}
+
+// peekStartsGroup reports whether the peek token is a '(' opening a
+// parenthesised argument. In command position a '(' is otherwise a boundary,
+// which used to leave `(2 + 3)` behind as a separate statement after `print`.
+func (p *Parser) peekStartsGroup() bool {
+	return p.peekTokenIs(token.LPAREN) && !p.peekToken.PrecededByNewline
 }
 
 // peekStartsBraceGroup reports whether the '{' peek token opens a valid brace
@@ -543,6 +586,11 @@ func (p *Parser) parseArgument() ast.Expression {
 	// `print range(1, 5)`, `print add(3, 4)`. Same rule as in expression position.
 	if p.peekTokenIs(token.LPAREN) && !p.peekToken.PrecededByWhitespace && isCleanWord(p.curToken.Literal) {
 		return p.parseCallExpression()
+	}
+	// A name glued to '[' indexes a variable, not a literal word: `print n[1]`.
+	// Same rule as in expression position.
+	if p.curTokenIs(token.IDENT) && p.peekGluedIndex() && isCleanWord(p.curToken.Literal) {
+		return p.parseGluedIndexes(&ast.Identifier{Token: p.curToken, Value: p.curToken.Literal})
 	}
 
 	firstTok := p.curToken
@@ -627,6 +675,10 @@ func (p *Parser) parseArgument() ast.Expression {
 	if sawExpansion {
 		if len(parts) == 1 {
 			result = parts[0]
+			// `print $n[1]`: a lone variable reference glued to '[' is an index.
+			if _, isVar := result.(*ast.VariableReference); isVar && p.peekGluedIndex() {
+				return p.parseGluedIndexes(result)
+			}
 		} else {
 			result = &ast.WordExpression{Token: firstTok, Parts: parts}
 		}

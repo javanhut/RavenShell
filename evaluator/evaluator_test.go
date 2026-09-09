@@ -109,7 +109,7 @@ output 7 - 2`
 }
 
 // Function calls used to be swallowed as literal command words: `print len("ab")`
-// printed "len".
+// printed "len". A spaced `(1)` is not a call; it is a parenthesised argument.
 func TestCallAsCommandArgument(t *testing.T) {
 	src := `fn add(a, b) { return a + b }
 print len("ab")
@@ -117,7 +117,7 @@ print upper("ravenshell")
 print range(1, 3)
 print add(3, 4)
 print notacall (1)`
-	want := []string{"2", "RAVENSHELL", "1 2", "7", "notacall"}
+	want := []string{"2", "RAVENSHELL", "1 2", "7", "notacall 1"}
 	_, out := run(t, src)
 	got := strings.Split(strings.TrimSpace(out), "\n")
 	if !slices.Equal(got, want) {

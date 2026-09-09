@@ -14,7 +14,7 @@ Single-line comments start with `#`:
 
 ```rsh
 # This is a comment
-print "Hello"  # Inline comment
+print "Hello"  # e.g. an inline comment
 ```
 
 There is no multi-line comment syntax.
@@ -58,7 +58,7 @@ Common escapes such as `\n`, `\t`, `\\`, `\"`, and `\'` are supported.
 ```rsh
 user = "raven"
 print "hi $user"        # hi raven
-print "home: ${HOME}"   # home: /Users/you
+print "home: ${HOME}"   # e.g. home: /home/you
 print 'literal $user'   # literal $user
 ```
 
@@ -145,7 +145,7 @@ Reference variables by name:
 ```rsh
 x = 10
 y = x + 5       # y is 15
-print x         # Prints 10
+print x         # 10
 ```
 
 ### Environment Variables
@@ -154,8 +154,8 @@ Access environment variables with `$`. Lookups check shell-local variables set
 with `export` first, then the process environment:
 
 ```rsh
-print $HOME     # Prints home directory
-print $USER     # Prints username
+print $HOME     # e.g. /home/you
+print $USER     # e.g. you
 path = $HOME + "/documents"
 ```
 
@@ -169,7 +169,7 @@ export EDITOR=vim
 print $EDITOR           # vim
 
 export MODELS=~/.ollama/models
-print $MODELS           # /Users/you/.ollama/models
+print $MODELS           # e.g. /home/you/.ollama/models
 
 export GREETING hello world
 print $GREETING         # hello world
@@ -213,7 +213,7 @@ or taking the modulo of zero is an error.
 
 ```rsh
 print 10 / 4       # 2
-print -7 / 2       # -3
+print (-7 / 2)     # -3
 print 10 % 4       # 2
 print 10 / 0       # error: division by zero
 ```
@@ -421,7 +421,7 @@ fn double(x) {          # parameter x shadows the global
     return x * 2
 }
 print double(5)         # 10
-print x                 # 100 (unchanged)
+print x                 # 100 -- unchanged
 ```
 
 ## Built-in Functions
@@ -510,7 +510,7 @@ print squares
 parts = split("alpha,beta,gamma", ",")
 print len(parts)            # 3
 print join(parts, " | ")    # alpha | beta | gamma
-print contains(parts, "beta")   # true (array membership)
+print contains(parts, "beta")   # true -- array membership
 print upper("ravenshell")   # RAVENSHELL
 print repeat_str("=", 20)   # ====================
 ```
@@ -551,8 +551,23 @@ sleep 60 &
 
 ```rsh
 git --version
-print $?            # 0 on success, non-zero on failure
+print $?            # e.g. 0 on success, non-zero on failure
 ```
+
+A built-in command that fails at its job behaves like a failing external
+command: the message goes to stderr (so `2>/dev/null` silences it), `$?` is
+set to 1, and the program carries on. That is what lets `||` and `if` react
+to it:
+
+```rsh
+cd build || print "no build directory"
+ls /nonexistent 2>/dev/null
+print $?            # 1
+```
+
+A misuse of the language itself, such as calling `len()` with no argument or
+indexing past the end of an array, is a script error: it is reported with its
+line and column and stops the program.
 
 ### Globbing
 
@@ -564,7 +579,7 @@ string is never expanded.
 
 ```rsh
 ls *.go                  # every .go file in the current directory
-print "*.go"             # the literal text *.go
+print "*.go"             # *.go -- the literal text
 rm *                     # everything except dotfiles
 ```
 
@@ -644,9 +659,14 @@ numbers = [10, 20, 30]
 first = numbers[0]      # 10
 second = numbers[1]     # 20
 last = numbers[2]       # 30
+
+print numbers[1]        # 20 -- indexing works in arguments too
+grid = [[1, 2], [3, 4]]
+print grid[1][0]        # 3
 ```
 
-**Error:** Accessing an out-of-bounds index produces an error.
+**Error:** Accessing an out-of-bounds index, or indexing something that is
+not an array, produces an error.
 
 ### Iterating Arrays
 
@@ -712,20 +732,35 @@ folder = "test"
 mkdir folder                # Creates directory named "test"
 
 count = 5
-print count                 # Prints 5
-print count + 10            # Prints 15
+print count                 # 5
+print $count + 10           # 15
+print (count + 10)          # 15
 ```
 
 Arithmetic in argument position is only recognised for the output builtins
 (`print`, `output`), only for operators with whitespace on both sides, and only
-when the left operand is a number, variable, function call, or another
-arithmetic expression. Quoted strings and bare words are literal text, so
-`print "a" + "b"` prints `a + b` and `echo a - b` passes three words to
-`echo`. To concatenate or compute with strings, assign first:
+when the left operand is a number, a `$name` reference, an index like `n[0]`,
+a function call, or another arithmetic expression. A bare name is
+substituted as a word but does not start arithmetic, and quoted strings are
+literal text, so `print count + 10` prints `5 + 10`, `print "a" + "b"`
+prints `a + b`, and `echo a - b` passes three words to `echo`.
+
+Parentheses make any expression a single argument evaluated as a value, for
+every command:
 
 ```rsh
+count = 5
+print (count + 10)          # 15
+print (count + 10) * 2      # 30
+echo (upper("hi"))          # HI
+```
+
+To concatenate or compute with strings, assign first:
+
+```rsh
+count = 5
 message = "Count: " + count
-print message               # Prints Count: 5
+print message               # Count: 5
 ```
 
 ## Complete Example

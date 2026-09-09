@@ -100,7 +100,7 @@ print info          # Version: 1
 ```rsh
 # Create an array
 numbers = [1, 2, 3, 4, 5]
-print numbers       # [1, 2, 3, 4, 5]
+print numbers       # 1 2 3 4 5
 
 # Access elements
 first = numbers[0]
@@ -114,7 +114,7 @@ items = []string
 items = append(items, "apple")
 items = append(items, "banana")
 items = append(items, "cherry")
-print items         # [apple, banana, cherry]
+print items         # apple banana cherry
 ```
 
 ## Control Flow
@@ -196,7 +196,7 @@ for i in range(5) {
 fruits = ["apple", "banana", "cherry", "date"]
 
 for fruit in fruits {
-    print "I like " + fruit
+    print ("I like " + fruit)
 }
 # Output:
 # I like apple
@@ -218,7 +218,7 @@ for i in range(10) {
 }
 
 print evens
-# Output: [0, 2, 4, 6, 8]
+# Output: 0 2 4 6 8
 ```
 
 ### Collecting Odd Numbers
@@ -233,7 +233,7 @@ for i in range(10) {
 }
 
 print odds
-# Output: [1, 3, 5, 7, 9]
+# Output: 1 3 5 7 9
 ```
 
 ## Functions
@@ -293,7 +293,7 @@ for i in range(10) {
 # Split a CSV row into fields
 row = "alice,30,engineer"
 fields = split(row, ",")
-print fields            # [alice, 30, engineer]
+print fields            # alice 30 engineer
 print fields[0]         # alice
 
 # Join an array into a string
@@ -404,7 +404,7 @@ for i in range(101) {
     total = total + i
 }
 
-print "Sum of 0-100: " + total
+print ("Sum of 0-100: " + total)
 # Output: Sum of 0-100: 5050
 ```
 

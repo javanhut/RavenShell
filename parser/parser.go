@@ -195,13 +195,13 @@ func (p *Parser) Errors() []string {
 }
 
 func (p *Parser) peekError(t token.TokenType) {
-	msg := fmt.Sprintf("expected next token to be %s, got %s instead",
-		t, p.peekToken.Type)
+	msg := fmt.Sprintf("expected %s, found %s",
+		describeTokenType(t), describeToken(p.peekToken))
 	p.errorAt(p.peekToken, msg)
 }
 
 func (p *Parser) noPrefixParseFnError(t token.TokenType) {
-	msg := fmt.Sprintf("no prefix parse function for %s found", t)
+	msg := fmt.Sprintf("unexpected %s; expected a value or expression", describeToken(p.curToken))
 	p.errorAt(p.curToken, msg)
 }
 
@@ -918,7 +918,7 @@ func (p *Parser) parseVariableReference() ast.Expression {
 	vr := &ast.VariableReference{Token: dollar}
 
 	if !p.peekTokenIs(token.IDENT) {
-		p.errorAt(p.peekToken, "expected identifier after $")
+		p.errorAt(p.peekToken, fmt.Sprintf("expected a variable name after '$', found %s", describeToken(p.peekToken)))
 		return nil
 	}
 
@@ -1050,7 +1050,7 @@ func (p *Parser) parseRedirectionTarget() ast.Expression {
 		return p.parseVariableReference()
 
 	default:
-		p.errorAt(p.curToken, fmt.Sprintf("unexpected token %s in redirection target", p.curToken.Type))
+		p.errorAt(p.curToken, fmt.Sprintf("expected a file name after the redirection, found %s", describeToken(p.curToken)))
 		return nil
 	}
 }
@@ -1297,7 +1297,7 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	// follow it get absorbed into the body — harmless in the REPL (which keeps
 	// reading until braces balance) but wrong for scripts and `-c`.
 	if !p.curTokenIs(token.RBRACE) {
-		p.errorAt(p.curToken, "expected } to close block, got EOF")
+		p.errorAt(p.curToken, "expected '}' to close the block, found end of input")
 	}
 
 	return block
@@ -1395,8 +1395,9 @@ func (p *Parser) parseArrayLiteral() ast.Expression {
 	// Check for []type syntax (empty array with type hint)
 	if p.peekTokenIs(token.RBRACKET) {
 		p.nextToken()
-		// Check if followed by a type identifier
-		if p.peekTokenIs(token.IDENT) {
+		// A type hint is glued to the brackets ([]string). A name after
+		// whitespace or a newline is the next statement, not a hint.
+		if p.peekTokenIs(token.IDENT) && !p.peekToken.PrecededByWhitespace && !p.peekToken.PrecededByNewline {
 			p.nextToken()
 			array.TypeHint = p.curToken.Literal
 			array.Elements = []ast.Expression{}

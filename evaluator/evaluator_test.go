@@ -419,6 +419,10 @@ func TestStringBuiltins(t *testing.T) {
 		{`r = lower("SHELL")`, "shell"},
 		{`r = trim("  hi  ")`, "hi"},
 		{`r = replace("a-b-a", "a", "x")`, "x-b-x"},
+		{`r = repeat_str("s", 3)`, "sss"},
+		{`r = repeat_str("-", 0)`, ""},
+		{`n = 2
+r = repeat_str("ab", n)`, "abab"},
 	}
 	for _, c := range cases {
 		e, _ := run(t, c.src)

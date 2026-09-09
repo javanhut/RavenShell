@@ -19,7 +19,7 @@ A command-line interpreter and scripting language written in Go. RavenShell comb
 - **Multi-line Editing** - Type loops, conditionals, and functions across lines with a continuation prompt
 - **Interruptible** - `Ctrl-C` stops a running command or loop without killing the shell; `Ctrl-R` searches history
 - **Process Management** - `ps`, `kill`, `killall`, background jobs (`&`), and `jobs`
-- **Built-in Helpers** - String/collection functions: `len`, `split`, `join`, `contains`, `upper`, `lower`, `trim`, `replace`, `glob`
+- **Built-in Helpers** - String/collection functions: `len`, `split`, `join`, `contains`, `upper`, `lower`, `trim`, `replace`, `repeat_str`, `glob`
 - **Environment & Substitution** - `export NAME=value` (or `export NAME value`), `env`, `$(command)` substitution, and `$VAR` interpolation in double quotes
 - **Built-in Commands** - File system operations (ls, cd, mkdir, rm, etc.)
 - **Human-Readable Aliases** - Natural-language names for common actions: `whereami`/`wai` (cwd), `read`/`view` (show a file), `remove`/`delete` (rm), `makefile`/`newfile`/`touch` (mkfile), `makedir` (mkdir)

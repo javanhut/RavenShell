@@ -449,16 +449,16 @@ for i in range(5) {
 
 numbers = range(3)
 print numbers
-# Output: [0, 1, 2]
+# Output: 0 1 2
 
 numbers = range(1, 5)
 print numbers
-# Output: [1, 2, 3, 4]
+# Output: 1 2 3 4
 ```
 
 ### append(array, value)
 
-Returns a new array with the value appended.
+Appends a value to an array.
 
 **Syntax:** `append(array, value)`
 
@@ -466,18 +466,29 @@ Returns a new array with the value appended.
 - `array`: The array to append to
 - `value`: The value to append
 
-**Returns:** New array with value at the end
+**Returns:** The array with the value at the end.
 
-**Note:** Does not modify the original array.
+When `array` is a variable, that variable is updated in place, so a bare
+`append` call in a loop body accumulates. The grown array is also returned,
+so `items = append(items, x)` works and does the same thing. Only the named
+variable changes: a copy held in another variable, or the caller's variable
+when appending to a function parameter, is not affected.
 
 **Example:**
 
 ```rsh
 items = []string
-items = append(items, "first")
-items = append(items, "second")
+append(items, "first")
+append(items, "second")
 print items
-# Output: [first, second]
+# Output: first second
+
+squares = []
+for i in range(4) {
+    append(squares, i * i)
+}
+print squares
+# Output: 0 1 4 9
 ```
 
 ### String and Collection Functions
@@ -492,6 +503,7 @@ print items
 | `lower(s)` | Lowercase a string | `lower("HI")` | `hi` |
 | `trim(s)` | Trim leading/trailing whitespace | `trim("  hi  ")` | `hi` |
 | `replace(s, old, new)` | Replace all occurrences | `replace("a-a", "a", "x")` | `x-x` |
+| `repeat_str(s, n)` | Repeat a string n times | `repeat_str("ab", 3)` | `ababab` |
 | `glob(pattern)` | Match files against a glob pattern | `glob("*.go")` | `[main.go, ...]` |
 
 ```rsh
@@ -500,6 +512,7 @@ print len(parts)            # 3
 print join(parts, " | ")    # alpha | beta | gamma
 print contains(parts, "beta")   # true (array membership)
 print upper("ravenshell")   # RAVENSHELL
+print repeat_str("=", 20)   # ====================
 ```
 
 ## External Commands
@@ -543,17 +556,32 @@ print $?            # 0 on success, non-zero on failure
 
 ### Globbing
 
-Globbing is explicit and unambiguous via the `glob()` function (so it never
-clashes with the `*` multiplication operator). Array results are splatted into
-multiple command arguments:
+An unquoted argument word containing `*`, `?`, or `[` is expanded to its
+sorted matches, the way a shell does. Names beginning with `.` are only
+matched by a pattern that itself begins with `.`, so `rm *` never sweeps up
+`.git`. A pattern that matches nothing is passed through verbatim. A quoted
+string is never expanded.
+
+```rsh
+ls *.go                  # every .go file in the current directory
+print "*.go"             # the literal text *.go
+rm *                     # everything except dotfiles
+```
+
+The `glob()` function does the same expansion explicitly and returns an
+array, which is useful for iterating or for storing the matches:
 
 ```rsh
 for f in glob("*.go") { print f }   # iterate matches
-rm glob("*.tmp")                    # remove all matching files
-print glob("src/*.go")              # directory patterns work too
+sources = glob("src/*.go")          # keep them
 ```
 
 `glob()` returns an empty array when nothing matches.
+
+**`*` as multiplication.** A `*` with whitespace on both sides, following a
+number, variable, or function call, is the multiplication operator
+(`print 2 * 3` prints 6). Anywhere else, including after a quoted string or a
+bare word, a `*` is glob text and expands against the current directory.
 
 ### Brace Expansion
 
@@ -643,7 +671,7 @@ for i in range(10) {
     }
 }
 print evens
-# Output: [0, 2, 4, 6, 8]
+# Output: 0 2 4 6 8
 ```
 
 ## Path Expressions
@@ -686,6 +714,18 @@ mkdir folder                # Creates directory named "test"
 count = 5
 print count                 # Prints 5
 print count + 10            # Prints 15
+```
+
+Arithmetic in argument position is only recognised for the output builtins
+(`print`, `output`), only for operators with whitespace on both sides, and only
+when the left operand is a number, variable, function call, or another
+arithmetic expression. Quoted strings and bare words are literal text, so
+`print "a" + "b"` prints `a + b` and `echo a - b` passes three words to
+`echo`. To concatenate or compute with strings, assign first:
+
+```rsh
+message = "Count: " + count
+print message               # Prints Count: 5
 ```
 
 ## Complete Example

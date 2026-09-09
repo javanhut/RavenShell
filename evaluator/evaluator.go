@@ -2130,6 +2130,8 @@ func (e *Evaluator) evalCallExpression(node *ast.CallExpression) (Value, error) 
 		return e.builtinStr1(args, "trim", strings.TrimSpace)
 	case "replace":
 		return e.builtinReplace(args)
+	case "repeat_str":
+		return e.builtinRepeatStr(args)
 	case "glob":
 		return e.builtinGlob(args)
 	}
@@ -2228,6 +2230,23 @@ func (e *Evaluator) builtinReplace(args []Value) (Value, error) {
 	old := e.valueToString(args[1])
 	newStr := e.valueToString(args[2])
 	return strings.ReplaceAll(s, old, newStr), nil
+}
+
+// builtinRepeatStr implements repeat_str(s, n): s concatenated n times, for
+// separators and padding ("-" * 40 style) without a loop.
+func (e *Evaluator) builtinRepeatStr(args []Value) (Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("repeat_str() takes exactly 2 arguments (string, count)")
+	}
+	s := e.valueToString(args[0])
+	n, err := e.valueToInt64(args[1])
+	if err != nil {
+		return nil, fmt.Errorf("repeat_str() count must be an integer, got %s", e.valueToString(args[1]))
+	}
+	if n < 0 {
+		return nil, fmt.Errorf("repeat_str() count must not be negative, got %d", n)
+	}
+	return strings.Repeat(s, int(n)), nil
 }
 
 // braceExpand performs shell brace expansion on one word: {a,b} comma lists,
@@ -2546,7 +2565,8 @@ func (e *Evaluator) builtinRange(args []ast.Expression) (Value, error) {
 	return result, nil
 }
 
-// builtinAppend implements append(arr, val) - returns new array with val appended
+// builtinAppend implements append(arr, val): grows arr in place when it is a
+// variable, and returns the grown array either way
 func (e *Evaluator) builtinAppend(args []ast.Expression) (Value, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("append() takes exactly 2 arguments")
@@ -2571,7 +2591,30 @@ func (e *Evaluator) builtinAppend(args []ast.Expression) (Value, error) {
 	result := make([]Value, len(arr)+1)
 	copy(result, arr)
 	result[len(arr)] = val
+
+	// When the array argument is a variable, store the grown array back into
+	// it, so a bare `append(arr, val)` in a loop body accumulates. The result
+	// is still returned, so `arr = append(arr, val)` keeps working too. Only
+	// the named binding changes: a copy held in another variable is untouched.
+	if name, ok := variableName(args[0]); ok {
+		if _, exists := e.getVar(name); exists {
+			e.setVar(name, result)
+		}
+	}
 	return result, nil
+}
+
+// variableName reports the variable a bare name or $name expression refers to.
+func variableName(expr ast.Expression) (string, bool) {
+	switch n := expr.(type) {
+	case *ast.Identifier:
+		return n.Value, true
+	case *ast.VariableReference:
+		if n.Name != nil {
+			return n.Name.Value, true
+		}
+	}
+	return "", false
 }
 
 // evalArrayLiteral handles array literals: [1, 2, 3] or []string

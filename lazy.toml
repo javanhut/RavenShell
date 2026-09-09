@@ -1,0 +1,44 @@
+# RavenShell's build interface for imlazy. Mirrors the Makefile targets; the
+# difference is that `imlazy install` builds as you and escalates only the
+# copy, where `sudo make install` builds as root.
+
+[settings]
+default = "build"
+
+[variables]
+binary = "ravenshell"
+prefix = "/usr/local"
+bindir = "{{prefix}}/bin"
+
+[commands.build]
+desc = "Compile the ravenshell binary"
+run = ["make build"]
+alias = ["b"]
+
+[commands.test]
+desc = "Run the test suite"
+run = ["go test ./..."]
+alias = ["t"]
+
+[commands.check]
+desc = "vet and test"
+run = ["go vet ./...", "go test ./..."]
+
+[commands.install]
+desc = "Install to {{bindir}}"
+dep = ["build"]
+escalate = true
+run = [
+  "install -d {{bindir}}",
+  "install -m 0755 {{binary}} {{bindir}}/{{binary}}",
+]
+
+[commands.register-shell]
+desc = "Add {{bindir}}/{{binary}} to /etc/shells"
+escalate = true
+run = ["sh -c 'grep -qxF {{bindir}}/{{binary}} /etc/shells || echo {{bindir}}/{{binary}} >> /etc/shells'"]
+
+[commands.uninstall]
+desc = "Remove {{bindir}}/{{binary}}"
+escalate = true
+run = ["rm -f {{bindir}}/{{binary}}"]

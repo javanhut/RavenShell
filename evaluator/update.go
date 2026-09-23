@@ -102,7 +102,10 @@ func (e *Evaluator) execRavenUpdate(args []string) (string, error) {
 	_ = os.Remove(built)
 	fmt.Fprintln(e.stdout, "Building...")
 	ldflags := fmt.Sprintf("-X main.version=%s -X main.sourceDir=%s", version, src)
-	if out, err := runCaptured(env, src, goBin, "build", "-ldflags", ldflags, "-o", built, "."); err != nil {
+	// The version is stamped above, so Go's own VCS stamping adds nothing, and
+	// it fails the build when the tree is not a git checkout but a parent
+	// directory holds a stray or empty .git (or the repo uses another VCS).
+	if out, err := runCaptured(env, src, goBin, "build", "-buildvcs=false", "-ldflags", ldflags, "-o", built, "."); err != nil {
 		_ = os.Remove(built)
 		return "", fmt.Errorf("raven-update: build failed: %v\n%s", err, out)
 	}

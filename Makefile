@@ -13,7 +13,7 @@ all: build
 
 ## build: compile the ravenshell binary
 build:
-	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
+	go build -buildvcs=false -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
 ## install: build and install to $(PREFIX)/bin (override with PREFIX=...)
 install: build

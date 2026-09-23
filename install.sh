@@ -22,7 +22,7 @@ SRCDIR="$(pwd)"
 echo "Building $BINARY..."
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
 # Stamp in the source dir so `raven-update` can rebuild from here later.
-go build -ldflags "-X main.version=$VERSION -X main.sourceDir=$SRCDIR" -o "$BINARY" .
+go build -buildvcs=false -ldflags "-X main.version=$VERSION -X main.sourceDir=$SRCDIR" -o "$BINARY" .
 
 # Choose a writable install directory, falling back to sudo then ~/.local/bin.
 use_sudo=0

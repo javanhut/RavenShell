@@ -44,20 +44,10 @@ var pkgWrappers = map[string]bool{"sudo": true, "doas": true, "env": true}
 // isPackageOp reports whether running name with args may change the set of
 // installed executables, looking through sudo/doas/env wrappers first.
 func isPackageOp(name string, args []string) bool {
-	cmd := filepath.Base(name)
-	for pkgWrappers[cmd] {
-		i := 0
-		for i < len(args) && (strings.HasPrefix(args[i], "-") ||
-			(cmd == "env" && strings.Contains(args[i], "="))) {
-			i++
-		}
-		if i >= len(args) {
-			return false
-		}
-		cmd = filepath.Base(args[i])
-		args = args[i+1:]
+	cmd, args := unwrapCommand(name, args)
+	if cmd == "" {
+		return false
 	}
-
 	if alwaysPkgManagers[cmd] {
 		return true
 	}
@@ -69,6 +59,26 @@ func isPackageOp(name string, args []string) bool {
 		}
 	}
 	return false
+}
+
+// unwrapCommand looks through sudo/doas/env wrappers (and their flags and
+// VAR=value assignments) to the command they run, returning its base name and
+// arguments. The name is empty when a wrapper is given no command.
+func unwrapCommand(name string, args []string) (string, []string) {
+	cmd := filepath.Base(name)
+	for pkgWrappers[cmd] {
+		i := 0
+		for i < len(args) && (strings.HasPrefix(args[i], "-") ||
+			(cmd == "env" && strings.Contains(args[i], "="))) {
+			i++
+		}
+		if i >= len(args) {
+			return "", nil
+		}
+		cmd = filepath.Base(args[i])
+		args = args[i+1:]
+	}
+	return cmd, args
 }
 
 // commandNameSet returns the current invokable command names as a set.

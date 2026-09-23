@@ -24,19 +24,28 @@ Lists files and directories in the specified location.
 
 **Syntax:**
 ```
-ls [path]
+ls [-l] [-a|-A] [-h] [path]
 ```
 
 **Arguments:**
 - `path` (optional): Directory to list. Defaults to current directory.
 
+**Flags:**
+- `-l`: Long format. Shows permissions, link count, owner, group, size and
+  modification time, plus the target of each symlink.
+- `-a`: Include hidden (dot) files, plus the `.` and `..` entries.
+- `-A`: Include hidden files, but not `.` and `..`.
+- `-h`: With `-l`, show sizes as `1.5K`, `23M`, and so on.
+
 **Output:** File and directory names, with directories marked with a trailing `/`.
+Names starting with `.` are hidden unless `-a` or `-A` is given.
 
 **Examples:**
 ```rsh
 ls                  # List current directory
 ls ~/Documents      # List Documents folder
 ls /tmp             # List /tmp directory
+ls -la              # Permissions, owner, size and date for everything
 ```
 
 ---
@@ -162,6 +171,14 @@ rm [-r|--recursive] [-f|--force] path [path...]
 
 **Safety:** Directory recursion is never inferred. `-f` suppresses missing-file
 errors but does not imply recursion.
+
+`rm` (and `rmdir -f`) refuse to remove `/`, any directory directly under it
+(`/usr`, `/home`, `/etc`, ...), or a home directory (`~`, or any directory
+directly under `/home`). This also catches `rm -rf /*`. The contents of your
+home directory can still be removed (`rm -rf ~/build`). There is no
+override: `--no-preserve-root` is ignored. Every path is checked before anything
+is deleted, so one protected path stops the whole command. The same check
+applies when the system `rm` is run through `sudo` or `doas`.
 
 **Examples:**
 ```rsh
@@ -503,7 +520,7 @@ program [args...] [flags...]
 ```rsh
 git status
 python --version
-ls -la
+tar -czf backup.tar.gz notes/
 grep -n "TODO" notes.txt
 print "a b c" | wc -w       # 3 -- external commands work in pipes
 ```

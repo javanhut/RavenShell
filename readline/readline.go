@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"ravenshell/ansi"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -188,8 +189,8 @@ func (r *Readline) suggestionFor(line string) string {
 	if line == "" {
 		return ""
 	}
-	for i := len(r.history) - 1; i >= 0; i-- {
-		entry := r.history[i]
+	for _, entry := range slices.Backward(r.history) {
+
 		if len(entry) > len(line) && strings.HasPrefix(entry, line) {
 			return entry
 		}
@@ -711,7 +712,7 @@ func (r *Readline) resetDrawState() {
 // cols: the last cell of the row was written and the wrap is pending, which
 // is exactly the state the terminal is in.
 func layout(cols, plen int, runes []rune, n int) (row, col int) {
-	for i := 0; i < plen; i++ {
+	for range plen {
 		if col >= cols {
 			row, col = row+1, 0
 		}

@@ -102,7 +102,7 @@ type Evaluator struct {
 	nextJobID int
 	jobsMu    sync.Mutex
 
-	interrupted int32 // set by Interrupt() (SIGINT); checked by loops
+	interrupted atomic.Int32 // set by Interrupt() (SIGINT); checked by loops
 
 	execCache      []string // cached executable names from search/system PATH
 	execCacheValid bool
@@ -231,16 +231,16 @@ func composePath(groups ...[]string) string {
 // Interrupt marks evaluation as interrupted (called from a SIGINT handler).
 // Running RavenShell loops will unwind with ErrInterrupted.
 func (e *Evaluator) Interrupt() {
-	atomic.StoreInt32(&e.interrupted, 1)
+	e.interrupted.Store(1)
 }
 
 // ClearInterrupt resets the interrupt flag (called before each REPL line).
 func (e *Evaluator) ClearInterrupt() {
-	atomic.StoreInt32(&e.interrupted, 0)
+	e.interrupted.Store(0)
 }
 
 func (e *Evaluator) checkInterrupt() bool {
-	return atomic.LoadInt32(&e.interrupted) == 1
+	return e.interrupted.Load() == 1
 }
 
 // configPath returns the path to a RavenShell config file in the user's home
@@ -286,8 +286,8 @@ func (e *Evaluator) popScope() {
 
 // getVar looks up a variable from the innermost scope outward.
 func (e *Evaluator) getVar(name string) (Value, bool) {
-	for i := len(e.scopes) - 1; i >= 0; i-- {
-		if v, ok := e.scopes[i][name]; ok {
+	for _, v := range slices.Backward(e.scopes) {
+		if v, ok := v[name]; ok {
 			return v, true
 		}
 	}
@@ -297,9 +297,9 @@ func (e *Evaluator) getVar(name string) (Value, bool) {
 // setVar assigns to an existing binding wherever it lives, or creates a new
 // binding in the innermost scope.
 func (e *Evaluator) setVar(name string, val Value) {
-	for i := len(e.scopes) - 1; i >= 0; i-- {
-		if _, ok := e.scopes[i][name]; ok {
-			e.scopes[i][name] = val
+	for _, v := range slices.Backward(e.scopes) {
+		if _, ok := v[name]; ok {
+			v[name] = val
 			return
 		}
 	}
@@ -846,6 +846,17 @@ func (e *Evaluator) execExternal(name string, args []string) (string, error) {
 		return "", nil
 	}
 
+	// `sudo rm -rf / --no-preserve-root` and `sudo rm -rf /*` reach the system
+	// rm, which (as root) would honor them. Refuse before it starts.
+	if cmd, cmdArgs := unwrapCommand(name, args); cmd == "rm" {
+		operands, _ := parseFlags(cmdArgs)
+		if err := e.refuseSystemRemoval("rm", operands); err != nil {
+			fmt.Fprintln(e.stderr, err)
+			e.lastStatus = 1
+			return "", nil
+		}
+	}
+
 	// Snapshot the installed-command set before a package manager runs so its
 	// effect can be reconciled into the completion cache afterward.
 	var pkgBefore map[string]bool
@@ -1242,45 +1253,78 @@ func termWidth() int {
 }
 
 func (e *Evaluator) execList(args []string) (string, error) {
-	operands := stripFlags(args)
+	operands, flags := parseFlags(args)
 	if len(operands) == 0 {
 		operands = []string{e.cwd}
 	}
+	long := hasFlag(flags, "l")
+	all := hasFlag(flags, "a", "all")
+	// -A (almost all) shows dotfiles but not . and ..
+	showHidden := all || hasFlag(flags, "A", "almost-all")
+	human := hasFlag(flags, "h", "human-readable")
 
 	color := e.colorOutput()
 
-	// Build the visible names (with a trailing / for directories), their colored
-	// display forms, and the plain one-per-line listing that is returned for
-	// pipes and command substitution.
-	var names, display []string
-	var plain bytes.Buffer
+	// Collect every entry to show: its visible name (with a trailing / for
+	// directories), its colored display form, and its file info for -l.
+	var entries []lsEntry
+	listedDir := false
 	for _, arg := range operands {
-		info, err := os.Stat(e.resolvePath(arg))
+		path := e.resolvePath(arg)
+		info, err := os.Stat(path)
 		if err != nil {
 			return "", fmt.Errorf("ls: %v", err)
 		}
 		if !info.IsDir() {
 			// Operands that are not directories - the file names a glob such as
 			// `ls *.txt` expands to - list as themselves.
-			// ponytail: no colorizeEntry here, it needs an os.DirEntry.
-			names = append(names, arg)
-			display = append(display, arg)
-			plain.WriteString(arg + "\n")
+			if li, err := os.Lstat(path); err == nil {
+				info = li
+			}
+			entries = append(entries, e.newLsEntry(arg, path, info, color))
 			continue
 		}
-		entries, err := os.ReadDir(e.resolvePath(arg))
+		listedDir = true
+		if all {
+			for _, dot := range []string{".", ".."} {
+				p := filepath.Join(path, dot)
+				if di, err := os.Lstat(p); err == nil {
+					entries = append(entries, e.newLsEntry(dot+"/", p, di, color))
+				}
+			}
+		}
+		dirEntries, err := os.ReadDir(path)
 		if err != nil {
 			return "", fmt.Errorf("ls: %v", err)
 		}
-		for _, entry := range entries {
+		for _, entry := range dirEntries {
+			if !showHidden && strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			ei, err := entry.Info()
+			if err != nil {
+				continue // removed between ReadDir and Info
+			}
 			name := entry.Name()
 			if entry.IsDir() {
 				name += "/"
 			}
-			names = append(names, name)
-			display = append(display, e.colorizeEntry(entry, name, color))
-			plain.WriteString(name + "\n")
+			entries = append(entries, e.newLsEntry(name, filepath.Join(path, entry.Name()), ei, color))
 		}
+	}
+
+	if long {
+		display, plain := formatLong(entries, human, listedDir)
+		fmt.Fprint(e.stdout, display)
+		return plain, nil
+	}
+
+	names := make([]string, len(entries))
+	display := make([]string, len(entries))
+	var plain bytes.Buffer
+	for i, en := range entries {
+		names[i], display[i] = en.name, en.display
+		plain.WriteString(en.name + "\n")
 	}
 
 	// To an interactive terminal, lay the entries out in columns. When the
@@ -1361,20 +1405,19 @@ func formatColumns(names, display []string, width int) string {
 }
 
 // colorizeEntry applies a color to a directory listing entry based on its
-// type. When color is false the name is returned unchanged.
-func (e *Evaluator) colorizeEntry(entry os.DirEntry, name string, color bool) string {
+// file mode. When color is false the name is returned unchanged.
+func (e *Evaluator) colorizeEntry(mode os.FileMode, name string, color bool) string {
 	if !color {
 		return name
 	}
 	switch {
-	case entry.IsDir():
+	case mode.IsDir():
 		return ansi.Wrap(ansi.Bold+ansi.Blue, name)
-	case entry.Type()&os.ModeSymlink != 0:
+	case mode&os.ModeSymlink != 0:
 		return ansi.Wrap(ansi.Cyan, name)
+	case mode&0111 != 0:
+		return ansi.Wrap(ansi.Green, name)
 	default:
-		if info, err := entry.Info(); err == nil && info.Mode()&0111 != 0 {
-			return ansi.Wrap(ansi.Green, name)
-		}
 		return name
 	}
 }
@@ -1475,6 +1518,9 @@ func (e *Evaluator) execRemoveDir(args []string) (string, error) {
 		return "", fmt.Errorf("rmdir: missing operand")
 	}
 	force := hasFlag(flags, "f", "force")
+	if err := e.refuseSystemRemoval("rmdir", paths); err != nil {
+		return "", err
+	}
 
 	for _, arg := range paths {
 		path := e.resolvePath(arg)
@@ -1502,6 +1548,9 @@ func (e *Evaluator) execRemove(args []string) (string, error) {
 	}
 	recursive := hasFlag(flags, "r", "R", "recursive")
 	force := hasFlag(flags, "f", "force")
+	if err := e.refuseSystemRemoval("rm", paths); err != nil {
+		return "", err
+	}
 	for _, arg := range paths {
 		path := e.resolvePath(arg)
 		info, err := os.Lstat(path)

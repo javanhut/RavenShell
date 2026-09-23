@@ -7,6 +7,7 @@ import (
 	"ravenshell/ast"
 	"ravenshell/lexer"
 	"ravenshell/parser"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -195,9 +196,9 @@ func (e *Evaluator) execRavenUnset(args []string) (string, error) {
 		return "", fmt.Errorf("raven-unset: usage: raven-unset <name>...")
 	}
 	for _, name := range args {
-		for i := len(e.scopes) - 1; i >= 0; i-- {
-			if _, ok := e.scopes[i][name]; ok {
-				delete(e.scopes[i], name)
+		for _, v := range slices.Backward(e.scopes) {
+			if _, ok := v[name]; ok {
+				delete(v, name)
 				break
 			}
 		}

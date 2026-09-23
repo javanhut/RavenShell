@@ -106,7 +106,6 @@ func main() {
 	// and cursor-position queries into the file and appear frozen. Otherwise
 	// read a program from stdin (e.g. `ravenshell < script.rsh` or piped input).
 	if term.IsTerminal(int(os.Stdin.Fd())) && stdoutIsTerminal() {
-		fmt.Println("Welcome to Raven Shell.")
 		repl()
 	} else {
 		runStdin()

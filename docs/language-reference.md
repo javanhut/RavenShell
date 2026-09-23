@@ -525,7 +525,7 @@ path`). External commands accept flags and participate in pipes and redirection:
 git status
 python --version
 print "one two three" | wc -w
-ls -la
+tar -czf backup.tar.gz notes/
 ```
 
 Command names may contain hyphens (`docker-compose up`). Output produced by the

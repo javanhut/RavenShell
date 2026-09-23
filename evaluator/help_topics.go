@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"bytes"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -337,9 +338,7 @@ func HelpTopicSummaries() map[string]string {
 // summaries: everything `raven-help` accepts, for tab completion.
 func HelpSummaries() map[string]string {
 	m := BuiltinSummaries()
-	for name, summary := range HelpTopicSummaries() {
-		m[name] = summary
-	}
+	maps.Copy(m, HelpTopicSummaries())
 	return m
 }
 
@@ -351,7 +350,7 @@ func renderTopicDetail(t helpTopic, color bool) string {
 		out.WriteString(dim("  also: "+strings.Join(t.aliases, ", "), color) + "\n")
 	}
 	out.WriteString("\n")
-	for _, line := range strings.Split(t.body, "\n") {
+	for line := range strings.SplitSeq(t.body, "\n") {
 		if line == "" {
 			out.WriteString("\n")
 			continue

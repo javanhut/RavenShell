@@ -32,7 +32,7 @@ For a quick local build without installing, run `go build -o ravenshell .`.
 ```bash
 ravenshell --version
 ravenshell
-# You should see: Welcome to Raven Shell.
+# You should see the prompt, e.g. ~ ❯
 ```
 
 ### Setting RavenShell as Your Default Shell
@@ -63,11 +63,10 @@ Start RavenShell without arguments to enter interactive mode:
 ./ravenshell
 ```
 
-You'll see the welcome message and a colored prompt showing your current
-directory (the home directory is abbreviated to `~`):
+You'll see a colored prompt showing your current directory (the home
+directory is abbreviated to `~`):
 
 ```
-Welcome to Raven Shell.
 ~/projects ❯
 ```
 
@@ -443,7 +442,7 @@ search/system `PATH`:
 ```rsh
 git status                  # run git
 python --version            # run python with a flag
-ls -la                      # flags are passed through
+tar -czf notes.tgz notes/   # flags are passed through
 print "a b c" | wc -w       # 3 -- external programs work in pipes
 ```
 

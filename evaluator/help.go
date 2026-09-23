@@ -24,7 +24,7 @@ type helpEntry struct {
 // helpEntries describes every built-in command. The order within a group is
 // preserved in the overview; groups are listed in groupOrder.
 var helpEntries = []helpEntry{
-	{name: "ls", usage: "ls [dir]", summary: "List the contents of a directory.", group: "Files & directories"},
+	{name: "ls", usage: "ls [-l] [-a|-A] [-h] [dir]", summary: "List the contents of a directory (-l for permissions, owner, size).", group: "Files & directories"},
 	{name: "cd", usage: "cd [dir]", summary: "Change the current directory (no argument goes home).", group: "Files & directories"},
 	{name: "cwd", aliases: []string{"whereami", "wai"}, usage: "whereami", summary: "Print the current working directory.", group: "Files & directories"},
 	{name: "show", aliases: []string{"read", "view"}, usage: "read <file>...", summary: "Print the contents of one or more files.", group: "Files & directories"},

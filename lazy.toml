@@ -20,6 +20,11 @@ desc = "Run the test suite"
 run = ["go test ./..."]
 alias = ["t"]
 
+[commands.fix]
+desc = "Fix go code using built in fix"
+run = ["go fix ./..."]
+
+
 [commands.check]
 desc = "vet and test"
 run = ["go vet ./...", "go test ./..."]

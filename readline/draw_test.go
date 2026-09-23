@@ -1,6 +1,7 @@
 package readline
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -195,7 +196,7 @@ func TestDrawShrinksBackToOneRow(t *testing.T) {
 		term.write(r.renderEscapes(cols, full[:i], i, ""))
 	}
 	// ...then delete it all.
-	for i := len(full) - 1; i >= 0; i-- {
+	for i := range slices.Backward(full) {
 		term.write(r.renderEscapes(cols, full[:i], i, ""))
 	}
 

@@ -9,3 +9,4 @@ coverage.txt
 # Editor/OS cruft
 .DS_Store
 ravenshell
+.lazy/

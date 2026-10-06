@@ -153,6 +153,15 @@ func (l *Lexer) skipWhitespaceAndComments() (sawWhitespace, sawNewline bool) {
 func (l *Lexer) scanToken() token.Token {
 	ch := l.peek()
 
+	// Compound assignment (x += 1) is an ASSIGN token carrying the operator;
+	// the parser desugars it to x = x + 1.
+	if strings.IndexByte("+-*/%", ch) >= 0 && l.peekNext() == '=' {
+		start := l.pos
+		l.advance()
+		l.advance()
+		return token.Token{Type: token.ASSIGN, Literal: l.input[start:l.pos]}
+	}
+
 	switch ch {
 	case '|':
 		if l.peekNext() == '|' {

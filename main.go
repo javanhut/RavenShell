@@ -344,7 +344,31 @@ func oscWorkingDir(dir string) string {
 	return "\x1b]7;" + u.String() + "\x07"
 }
 
+// OSC 133 semantic prompt marks: prompt start/end, command start, and
+// command end with its exit status. Terminals that do not know them ignore
+// them.
+const (
+	oscPromptStart = "\x1b]133;A\x07"
+	oscPromptEnd   = "\x1b]133;B\x07"
+	oscCommandRun  = "\x1b]133;C\x07"
+)
+
+// enableShellIntegration exports RAVENSHELL_OSC133=1 so init scripts (and
+// the terminal's generated init.rsh) know the marks are emitted natively.
+func enableShellIntegration() {
+	os.Setenv("RAVENSHELL_OSC133", "1")
+}
+
+// runMarked runs one REPL command between OSC 133 C and D;<status>.
+func runMarked(w io.Writer, eval *evaluator.Evaluator, src string) sourceResult {
+	fmt.Fprint(w, oscCommandRun)
+	result := runSource(eval, src, "")
+	fmt.Fprintf(w, "\x1b]133;D;%d\x07", result.status)
+	return result
+}
+
 func repl() {
+	enableShellIntegration()
 	eval := evaluator.New()
 
 	// Load .ravenrc configuration file, then any injected init script.
@@ -386,7 +410,9 @@ func repl() {
 	for {
 		if buf.Len() > 0 {
 			rl.SetPrompt(contPrompt)
+			rl.SetPromptMarks("", "")
 		} else {
+			rl.SetPromptMarks(oscPromptStart, oscPromptEnd)
 			// Refresh the prompt so it reflects the current directory after cd.
 			rl.SetPrompt(shellPrompt(eval))
 			// Report the cwd to the terminal (OSC 7) so new tabs and splits open
@@ -429,7 +455,7 @@ func repl() {
 		}
 
 		eval.ClearInterrupt()
-		result := runSource(eval, src, "")
+		result := runMarked(os.Stdout, eval, src)
 		buf.Reset()
 		if result.exitRequested {
 			fmt.Println("Goodbye!")

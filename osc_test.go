@@ -3,6 +3,7 @@ package main
 import (
 	"net/url"
 	"os"
+	"ravenshell/evaluator"
 	"strings"
 	"testing"
 )
@@ -49,5 +50,28 @@ func TestOscWorkingDir(t *testing.T) {
 	}
 	if u.Scheme != "file" || u.Host != host || u.Path != "/Users/a b/proj" {
 		t.Errorf("round-trip mismatch: scheme=%q host=%q path=%q", u.Scheme, u.Host, u.Path)
+	}
+}
+
+func TestRunMarkedEmitsCommandMarks(t *testing.T) {
+	var b strings.Builder
+	runMarked(&b, evaluator.New(), "definitely_missing_raven_command")
+	if got, want := b.String(), "\x1b]133;C\x07\x1b]133;D;127\x07"; got != want {
+		t.Errorf("marks = %q, want %q", got, want)
+	}
+	b.Reset()
+	if res := runMarked(&b, evaluator.New(), "exit(4)"); !res.exitRequested || res.status != 4 {
+		t.Errorf("result = %+v", res)
+	}
+	if got, want := b.String(), "\x1b]133;C\x07\x1b]133;D;4\x07"; got != want {
+		t.Errorf("marks = %q, want %q", got, want)
+	}
+}
+
+func TestEnableShellIntegrationExportsMarker(t *testing.T) {
+	t.Setenv("RAVENSHELL_OSC133", "")
+	enableShellIntegration()
+	if os.Getenv("RAVENSHELL_OSC133") != "1" {
+		t.Error("RAVENSHELL_OSC133 not exported")
 	}
 }

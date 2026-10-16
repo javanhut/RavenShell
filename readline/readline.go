@@ -77,6 +77,8 @@ type Completer func(line string, pos int) []Candidate
 type Readline struct {
 	prompt          string // final (editable) prompt line, redrawn in place
 	promptHead      string // lines of a multi-line prompt above the final one
+	markStart       string // written once before the prompt (OSC 133 A)
+	markEnd         string // written once after the prompt (OSC 133 B)
 	history         []string
 	historyIdx      int
 	historyFile     string // Path to the persistent history file (empty disables)
@@ -233,11 +235,7 @@ func (r *Readline) ReadLine() (string, error) {
 	// newline), move to a fresh line so the prompt always starts at column 1.
 	r.ensureFreshLine()
 
-	// Print the prompt. The editable region is freshly positioned at the start
-	// of its row, so reset the multi-line bookkeeping and let draw render it.
-	r.printPromptHead()
-	r.resetDrawState()
-	r.refresh(line, pos)
+	r.openPrompt()
 
 	buf := make([]byte, 3)
 	for {
@@ -873,7 +871,16 @@ func displayWidth(s string) int {
 	for i := 0; i < len(s); {
 		if s[i] == 0x1b { // ESC: skip the escape sequence
 			i++
-			if i < len(s) && s[i] == '[' { // CSI: ESC [ ... final byte 0x40-0x7e
+			if i < len(s) && s[i] == ']' { // OSC: ESC ] ... BEL or ESC \
+				for i++; i < len(s) && s[i] != 0x07 && s[i] != 0x1b; i++ {
+				}
+				if i < len(s) && s[i] == 0x1b {
+					i++
+				}
+				if i < len(s) {
+					i++
+				}
+			} else if i < len(s) && s[i] == '[' { // CSI: ESC [ ... final byte 0x40-0x7e
 				i++
 				for i < len(s) && (s[i] < 0x40 || s[i] > 0x7e) {
 					i++
@@ -1306,6 +1313,23 @@ func (r *Readline) SetPrompt(prompt string) {
 		r.promptHead = ""
 		r.prompt = prompt
 	}
+}
+
+// SetPromptMarks sets zero-width sequences written once around each primary
+// prompt (e.g. OSC 133 A and B), not on every redraw. Empty strings disable.
+func (r *Readline) SetPromptMarks(start, end string) {
+	r.markStart, r.markEnd = start, end
+}
+
+// openPrompt prints the prompt for a fresh, empty read. The editable region
+// is freshly positioned at the start of its row, so the multi-line
+// bookkeeping is reset and draw renders it.
+func (r *Readline) openPrompt() {
+	fmt.Print(r.markStart)
+	r.printPromptHead()
+	r.resetDrawState()
+	r.refresh(nil, 0)
+	fmt.Print(r.markEnd)
 }
 
 // printPromptHead prints the informational lines of a multi-line prompt. The

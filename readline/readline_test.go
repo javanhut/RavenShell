@@ -348,3 +348,33 @@ func TestHistoryFileRoundTripsMultiLine(t *testing.T) {
 		}
 	}
 }
+
+func TestDisplayWidthSkipsOSC(t *testing.T) {
+	if got := displayWidth("\x1b]133;A\x07ab\x1b]7;file://h/x\x1b\\c"); got != 3 {
+		t.Errorf("displayWidth = %d, want 3", got)
+	}
+}
+
+func TestOpenPromptWrapsPromptInMarks(t *testing.T) {
+	r := newTestReadline()
+	r.SetPrompt("head\n> ")
+	r.SetPromptMarks("<A>", "<B>")
+	rd, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	r.openPrompt()
+	os.Stdout = old
+	w.Close()
+	out, _ := io.ReadAll(rd)
+	s := string(out)
+	a, h, p, b := strings.Index(s, "<A>"), strings.Index(s, "head"), strings.LastIndex(s, "> "), strings.Index(s, "<B>")
+	if a < 0 || !(a < h && h < p && p < b) || !strings.HasSuffix(s, "<B>") {
+		t.Errorf("prompt output = %q", s)
+	}
+	if strings.Count(s, "<A>") != 1 || strings.Count(s, "<B>") != 1 {
+		t.Errorf("marks repeated: %q", s)
+	}
+}

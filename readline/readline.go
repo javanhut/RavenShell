@@ -802,6 +802,7 @@ func (r *Readline) renderEscapes(cols int, line []rune, pos int, suggestion stri
 
 	// 4) Reprint prompt, line, and the dim suggestion tail.
 	b.WriteString(r.prompt)
+	b.WriteString(r.markEnd)
 	renderText(&b, line)
 	if len(tail) > 0 {
 		b.WriteString(ansi.BrightBlk)
@@ -847,6 +848,7 @@ func (r *Readline) drawSingleLine(line []rune, pos int, suggestion string) {
 	var b strings.Builder
 	b.WriteString("\r\033[K")
 	b.WriteString(r.prompt)
+	b.WriteString(r.markEnd)
 	renderText(&b, line)
 
 	tail := suggestionTail(line, suggestion)
@@ -1315,8 +1317,10 @@ func (r *Readline) SetPrompt(prompt string) {
 	}
 }
 
-// SetPromptMarks sets zero-width sequences written once around each primary
-// prompt (e.g. OSC 133 A and B), not on every redraw. Empty strings disable.
+// SetPromptMarks sets zero-width sequences around each primary prompt (e.g.
+// OSC 133 A and B). start is written once per read; end follows the prompt on
+// every redraw so the input region always begins after it. Empty strings
+// disable.
 func (r *Readline) SetPromptMarks(start, end string) {
 	r.markStart, r.markEnd = start, end
 }
@@ -1329,7 +1333,6 @@ func (r *Readline) openPrompt() {
 	r.printPromptHead()
 	r.resetDrawState()
 	r.refresh(nil, 0)
-	fmt.Print(r.markEnd)
 }
 
 // printPromptHead prints the informational lines of a multi-line prompt. The

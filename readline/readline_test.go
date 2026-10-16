@@ -355,6 +355,27 @@ func TestDisplayWidthSkipsOSC(t *testing.T) {
 	}
 }
 
+func TestRedrawKeepsPromptEndMarkBeforeInput(t *testing.T) {
+	r := newTestReadline()
+	r.SetPrompt("> ")
+	r.SetPromptMarks("<A>", "<B>")
+	if s := r.renderEscapes(80, []rune("ls"), 2, ""); !strings.Contains(s, "> <B>ls") {
+		t.Errorf("renderEscapes = %q", s)
+	}
+	rd, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	r.drawSingleLine([]rune("ls"), 2, "")
+	os.Stdout = old
+	w.Close()
+	if out, _ := io.ReadAll(rd); !strings.Contains(string(out), "> <B>ls") || strings.Contains(string(out), "<A>") {
+		t.Errorf("drawSingleLine = %q", out)
+	}
+}
+
 func TestOpenPromptWrapsPromptInMarks(t *testing.T) {
 	r := newTestReadline()
 	r.SetPrompt("head\n> ")

@@ -123,6 +123,16 @@ empty = []string
 
 Variable names must start with a letter and can contain letters, numbers, and underscores.
 
+Compound assignment `+=`, `-=`, `*=`, `/=`, `%=` updates a variable in place
+(`x += 1` is `x = x + 1`; `+=` also concatenates strings). A trailing `;` is
+optional on any statement:
+
+```rsh
+count = 0;
+for i in range(15) { count += 1; }
+print count
+```
+
 ### Program exit
 
 `exit()` ends a script or interactive session successfully. Pass an integer

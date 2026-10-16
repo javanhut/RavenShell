@@ -1176,9 +1176,14 @@ func (p *Parser) parseAssignmentStatement() *ast.AssignmentStatement {
 	if !p.expectPeek(token.ASSIGN) {
 		return nil
 	}
+	op := p.curToken
 
 	p.nextToken()
 	stmt.Value = p.parseExpression(LOWEST)
+
+	if len(op.Literal) == 2 { // x += v  =>  x = x + v
+		stmt.Value = &ast.InfixExpression{Token: op, Left: stmt.Name, Operator: op.Literal[:1], Right: stmt.Value}
+	}
 
 	return stmt
 }

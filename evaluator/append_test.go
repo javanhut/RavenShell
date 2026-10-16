@@ -20,3 +20,19 @@ func TestAppendGrowsVariableInPlace(t *testing.T) {
 		}
 	}
 }
+
+func TestCompoundAssignment(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{"count = 0 for i in range(15){count += 1} print count\n", "15\n"},
+		{"x = 10\nx -= 3\nx *= 2\nx %= 5\nprint x\n", "4\n"},
+		{"s = \"a\"\ns += \"b\"\nprint s\n", "ab\n"},
+		{"x = 20\nx /= 4\nprint x\n", "5\n"},
+		{"x = 1;\nx += 2;\nx /= 3; print x;\n", "1\n"},
+		{"c = 0; for i in range(3){c += 1;} print c\n", "3\n"},
+	}
+	for _, c := range cases {
+		if _, out := run(t, c.src); out != c.want {
+			t.Errorf("%q: output = %q, want %q", c.src, out, c.want)
+		}
+	}
+}

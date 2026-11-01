@@ -106,6 +106,8 @@ type Evaluator struct {
 
 	execCache      []string // cached executable names from search/system PATH
 	execCacheValid bool
+
+	historyClearer func() (int, error) // interactive line editor's history reset (raven-history clear)
 }
 
 // ErrInterrupted is returned when evaluation is interrupted by SIGINT (Ctrl-C).
@@ -793,6 +795,8 @@ func (e *Evaluator) dispatchCommand(cmd *ast.Command, args []string) (string, er
 		return e.execRavenUpdate(args)
 	case ast.CMD_RAVENCOMPLETIONS:
 		return e.execRavenCompletions(args)
+	case ast.CMD_RAVENHISTORY:
+		return e.execRavenHistory(args)
 	case ast.CMD_RAVENALIAS:
 		return e.execRavenAlias(args)
 	case ast.CMD_RAVENUNALIAS:

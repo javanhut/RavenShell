@@ -178,6 +178,7 @@ const (
 	CMD_RAVENHELP        CommandType = "raven-help"
 	CMD_RAVENUPDATE      CommandType = "raven-update"
 	CMD_RAVENCOMPLETIONS CommandType = "raven-completions"
+	CMD_RAVENHISTORY     CommandType = "raven-history"
 	CMD_RAVENALIAS       CommandType = "raven-alias"
 	CMD_RAVENUNALIAS     CommandType = "raven-unalias"
 	CMD_RAVENSOURCE      CommandType = "raven-source"

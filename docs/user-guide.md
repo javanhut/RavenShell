@@ -258,6 +258,7 @@ Use arrow keys to navigate through previously entered commands:
 
 History is **persistent**: it is saved to `~/.raven_history` and restored across
 sessions, so suggestions and recall work for commands from previous runs too.
+Run `raven-history clear` to forget it all, inline suggestions included.
 
 ### Multi-line Input
 

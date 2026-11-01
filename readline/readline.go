@@ -112,12 +112,22 @@ func New(prompt string) *Readline {
 	r.SetPrompt(prompt)
 
 	// Persist history across sessions in ~/.raven_history (fish-style).
-	if home, err := os.UserHomeDir(); err == nil {
-		r.historyFile = filepath.Join(home, ".raven_history")
+	if path := HistoryPath(); path != "" {
+		r.historyFile = path
 		r.loadHistory()
 	}
 
 	return r
+}
+
+// HistoryPath returns the persistent history file, ~/.raven_history, or ""
+// when the home directory is unknown.
+func HistoryPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".raven_history")
 }
 
 // loadHistory reads the persistent history file into memory.
@@ -1345,8 +1355,17 @@ func (r *Readline) printPromptHead() {
 	fmt.Print("\r" + strings.ReplaceAll(r.promptHead, "\n", "\r\n"))
 }
 
-// ClearHistory clears the command history
-func (r *Readline) ClearHistory() {
+// ClearHistory forgets every history entry, in memory and in the persistent
+// history file, which also empties the inline autosuggestions. It returns the
+// number of entries dropped from memory.
+func (r *Readline) ClearHistory() (int, error) {
+	n := len(r.history)
 	r.history = make([]string, 0)
 	r.historyIdx = -1
+	if r.historyFile != "" {
+		if err := os.Remove(r.historyFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return n, err
+		}
+	}
+	return n, nil
 }

@@ -399,3 +399,35 @@ func TestOpenPromptWrapsPromptInMarks(t *testing.T) {
 		t.Errorf("marks repeated: %q", s)
 	}
 }
+
+func TestClearHistoryForgetsMemoryAndFile(t *testing.T) {
+	dir := t.TempDir()
+	r := &Readline{historyIdx: -1, historyFile: filepath.Join(dir, "history")}
+	r.AddHistory("print one")
+	r.AddHistory("print two")
+	if r.suggestionFor("print") == "" {
+		t.Fatal("expected a suggestion before clearing")
+	}
+
+	n, err := r.ClearHistory()
+	if err != nil || n != 2 {
+		t.Fatalf("ClearHistory() = %d, %v; want 2, nil", n, err)
+	}
+	if got := r.suggestionFor("print"); got != "" {
+		t.Errorf("suggestion after clear = %q, want none", got)
+	}
+	if _, err := os.Stat(r.historyFile); !os.IsNotExist(err) {
+		t.Errorf("history file still present after clear: %v", err)
+	}
+
+	// Clearing again with no file is not an error, and new entries persist.
+	if _, err := r.ClearHistory(); err != nil {
+		t.Errorf("second ClearHistory() error: %v", err)
+	}
+	r.AddHistory("ls")
+	r2 := &Readline{historyFile: r.historyFile}
+	r2.loadHistory()
+	if len(r2.history) != 1 || r2.history[0] != "ls" {
+		t.Errorf("reloaded history = %q, want [ls]", r2.history)
+	}
+}

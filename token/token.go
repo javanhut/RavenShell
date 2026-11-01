@@ -54,6 +54,7 @@ const (
 	RAVENHELP        TokenType = "RAVENHELP"
 	RAVENUPDATE      TokenType = "RAVENUPDATE"
 	RAVENCOMPLETIONS TokenType = "RAVENCOMPLETIONS"
+	RAVENHISTORY     TokenType = "RAVENHISTORY"
 	RAVENALIAS       TokenType = "RAVENALIAS"
 	RAVENUNALIAS     TokenType = "RAVENUNALIAS"
 	RAVENSOURCE      TokenType = "RAVENSOURCE"
@@ -146,6 +147,7 @@ var TokenMap = map[string]TokenType{
 	"help":              RAVENHELP, // short alias for raven-help
 	"raven-update":      RAVENUPDATE,
 	"raven-completions": RAVENCOMPLETIONS,
+	"raven-history":     RAVENHISTORY,
 	"raven-alias":       RAVENALIAS,
 	"raven-unalias":     RAVENUNALIAS,
 	"raven-source":      RAVENSOURCE,

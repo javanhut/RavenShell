@@ -140,6 +140,8 @@ func commandTypeForName(name string) ast.CommandType {
 		return ast.CMD_RAVENUPDATE
 	case "raven-completions":
 		return ast.CMD_RAVENCOMPLETIONS
+	case "raven-history":
+		return ast.CMD_RAVENHISTORY
 	case "raven-alias":
 		return ast.CMD_RAVENALIAS
 	case "raven-unalias":

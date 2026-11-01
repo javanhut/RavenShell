@@ -380,6 +380,9 @@ func repl() {
 	// Set up path completion to use evaluator's current directory
 	rl.SetCwdFunc(eval.GetCwd)
 
+	// raven-history clear resets the line editor's history and suggestions.
+	eval.SetHistoryClearer(rl.ClearHistory)
+
 	// Offer user-defined functions and PATH executables as tab completions.
 	rl.SetCommandProvider(eval.AvailableCommands)
 

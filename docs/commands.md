@@ -505,6 +505,29 @@ raven-completions clear           # start fresh
 
 ---
 
+### raven-history - Manage Command History
+
+Manages the persistent command history in `~/.raven_history`, which feeds
+Up/Down recall, `Ctrl+R` search, and the grey inline autosuggestions.
+
+**Syntax:**
+```
+raven-history                     # show help
+raven-history clear               # forget all history and inline suggestions
+raven-history path                # print the history file
+```
+
+**Notes:**
+- `clear` empties the running session's history and deletes the history file,
+  so suggestions disappear immediately with no restart. New commands are
+  recorded again from then on.
+- Other RavenShell windows that are already open keep their in-memory history
+  until they exit.
+- This is separate from `raven-completions clear`, which deletes cached tab
+  completions for command flags and subcommands.
+
+---
+
 ## External Commands
 
 Any command that is not a built-in is executed as an external program. The shell

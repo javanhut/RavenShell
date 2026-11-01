@@ -288,6 +288,11 @@ func builtinSpecs(e *Engine) map[string]*Spec {
 				{Text: "clear", Desc: "Delete cached completions"},
 				{Text: "path", Desc: "Print the cache directory"},
 			}, NoFiles: true}},
+		"raven-history": {
+			Args: &ArgSpec{Static: []Candidate{
+				{Text: "clear", Desc: "Forget all history and inline suggestions"},
+				{Text: "path", Desc: "Print the history file"},
+			}, NoFiles: true}},
 	}
 
 	// help/raven-help complete the built-in command names with their summaries.
